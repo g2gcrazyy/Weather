@@ -1,0 +1,409 @@
+<!--
+  Personal weather app — Apple Weather-style UI, pluggable data source.
+
+  SOURCES
+  -------
+  'gem' : Environment Canada GEM/HRDPS model via Open-Meteo (CORS JSON, no key). Works now.
+  'twn' : The Weather Network / Pelmorex — public API (weatherapi.pelmorex.com/api/v1),
+          wildcard CORS, no proxy, no login. shortterm + longterm + averages feeds.
+          For personal, non-redistributed use.
+
+  This is a personal, non-redistributed frontend. Data stays on your machine.
+-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Weather</title>
+<style>
+  :root {
+    --ink:#fff; --ink-dim:rgba(255,255,255,.62); --ink-faint:rgba(255,255,255,.38);
+    --card:rgba(255,255,255,.14); --card-line:rgba(255,255,255,.16);
+    --blur:saturate(140%) blur(20px); --g-top:#2a4d6e; --g-bot:#6a7f97;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+    color:var(--ink);
+    background:linear-gradient(180deg,var(--g-top) 0%,var(--g-bot) 100%);
+    background-attachment:fixed; min-height:100%; transition:background 1.2s ease;
+    -webkit-font-smoothing:antialiased;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .wrap { max-width:480px; margin:0 auto; padding:14px 16px 40px; }
+
+  .srcbar { display:flex; gap:6px; margin-bottom:8px; }
+  .srcbar button { flex:1; background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+    border:1px solid var(--card-line); color:var(--ink-dim); font-size:13px; font-weight:600; padding:8px; border-radius:10px; cursor:pointer; }
+  .srcbar button.on { color:var(--ink); background:rgba(255,255,255,.24); }
+
+  .searchbar { position:relative; margin-bottom:10px; }
+  .searchbar input { width:100%; border:none; outline:none; background:var(--card);
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); color:var(--ink); font-size:16px;
+    padding:11px 40px 11px 38px; border-radius:12px; border:1px solid var(--card-line); }
+  .searchbar input::placeholder { color:var(--ink-faint); }
+  .searchbar .mag { position:absolute; left:13px; top:50%; transform:translateY(-50%); opacity:.55; font-size:15px; }
+  .searchbar .loc { position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--ink); opacity:.8; font-size:17px; cursor:pointer; padding:6px; }
+  .results { position:absolute; z-index:20; left:0; right:0; top:48px; background:rgba(30,40,55,.86); backdrop-filter:var(--blur); border-radius:12px; overflow:hidden; border:1px solid var(--card-line); }
+  .results button { display:block; width:100%; text-align:left; background:none; border:none; color:var(--ink); padding:11px 14px; font-size:15px; cursor:pointer; }
+  .results button:hover { background:rgba(255,255,255,.1); }
+  .results .sub { color:var(--ink-dim); font-size:13px; }
+
+  .hero { text-align:center; padding:22px 0 8px; }
+  .hero .city { font-size:33px; font-weight:400; letter-spacing:.2px; }
+  .hero .temp { font-size:92px; font-weight:200; line-height:1; margin:2px 0 0 8px; }
+  .hero .cond { font-size:19px; color:var(--ink-dim); font-weight:500; }
+  .hero .hl { font-size:19px; font-weight:500; margin-top:2px; }
+
+  .card { background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+    border:1px solid var(--card-line); border-radius:16px; margin-top:12px; overflow:hidden; }
+  .card .cap { font-size:12.5px; letter-spacing:.6px; text-transform:uppercase; color:var(--ink-dim); padding:12px 14px 0; }
+
+  .narr { padding:12px 14px 14px; font-size:15px; line-height:1.45; color:var(--ink); }
+
+  .hourly { display:flex; gap:2px; overflow-x:auto; padding:12px 8px 10px; cursor:grab; scroll-behavior:smooth;
+    scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.4) transparent; }
+  .hourly.drag { cursor:grabbing; scroll-behavior:auto; user-select:none; }
+  .hourly::-webkit-scrollbar { height:6px; }
+  .hourly::-webkit-scrollbar-thumb { background:rgba(255,255,255,.4); border-radius:3px; }
+  .hourly::-webkit-scrollbar-track { background:transparent; }
+  .hour { flex:0 0 auto; width:58px; text-align:center; }
+  .hour .h { font-size:14px; color:var(--ink-dim); font-weight:600; }
+  .hour .i { font-size:24px; margin:7px 0 4px; }
+  .hour .t { font-size:18px; font-weight:500; }
+  .hour .p { font-size:11px; color:#8fd0ff; height:13px; }
+
+  .day { display:grid; grid-template-columns:46px 30px 1fr 42px 30px 42px; align-items:center; gap:8px; padding:9px 14px; }
+  .day + .day { border-top:1px solid rgba(255,255,255,.08); }
+  .day .dn { font-size:17px; font-weight:600; }
+  .day .di { font-size:20px; text-align:center; }
+  .day .lo,.day .hi { font-size:17px; }
+  .day .lo { color:var(--ink-dim); text-align:right; }
+  .day .hi { text-align:right; }
+  .track { height:5px; border-radius:3px; background:rgba(255,255,255,.18); position:relative; }
+  .fill { position:absolute; height:100%; border-radius:3px; background:linear-gradient(90deg,#7bd0ff,#ffd479,#ff8a5c); }
+
+  .tiles { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
+  .tile { background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+    border:1px solid var(--card-line); border-radius:16px; padding:12px 14px 14px; min-height:96px; }
+  .tile .cap { font-size:12px; letter-spacing:.6px; text-transform:uppercase; color:var(--ink-dim); }
+  .tile .big { font-size:27px; font-weight:300; margin-top:6px; }
+  .tile .note { font-size:13px; color:var(--ink-dim); margin-top:4px; }
+
+  .foot { text-align:center; color:var(--ink-faint); font-size:12px; margin-top:20px; line-height:1.5; }
+  .setup { background:rgba(0,0,0,.22); border:1px solid var(--card-line); border-radius:14px; padding:14px 16px; margin-top:12px; font-size:13.5px; line-height:1.5; color:var(--ink-dim); }
+  .setup b { color:var(--ink); }
+  .setup code { background:rgba(255,255,255,.12); padding:1px 5px; border-radius:4px; font-size:12.5px; }
+
+  .msg { text-align:center; padding:60px 20px; color:var(--ink-dim); }
+  .spinner { width:26px; height:26px; border:3px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; margin:0 auto 14px; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce){ .spinner{ animation:none; } body{ transition:none; } }
+</style>
+
+<div class="wrap">
+  <div class="srcbar">
+    <button id="src-gem" class="on">GEM (Env. Canada)</button>
+    <button id="src-twn">Weather Network</button>
+  </div>
+  <div class="searchbar">
+    <span class="mag">&#8981;</span>
+    <input id="q" type="text" placeholder="Search city or town" autocomplete="off" spellcheck="false">
+    <button class="loc" id="geo" title="Use my location">&#9678;</button>
+    <div class="results" id="results" style="display:none"></div>
+  </div>
+  <div id="app"><div class="msg"><div class="spinner"></div>Getting your weather&#8230;</div></div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+/* ============================ CONFIG ============================ */
+const CONFIG = {
+  source: 'gem',            // 'gem' works now. Click "Weather Network" or set to 'twn'.
+  twn: {                    // Pelmorex API — public, wildcard CORS, no proxy, no login.
+    base: 'https://weatherapi.pelmorex.com/api/v1',
+    shortterm: '/shortterm',                    // 6-hourly (fallback for the strip / current)
+    hourly:    '/hourly',                        // TRUE 1-hourly JSON, wildcard CORS, no proxy
+    longterm:  '/longterm',                     // 7/14-day (paste its response to finalize mapping)
+    averages:  '/historical/averages/daily',    // climate normals -> "normal" line
+    count: 16,                                   // shortterm periods (16 x 6h ~= 4 days)
+    hourlyPage: '',                              // OPTIONAL true-hourly: URL that returns the TWN hourly
+                                                 //   PAGE (its <script ld+json> holds 72x1h). Needs a proxy
+                                                 //   (main site isn't wildcard-CORS). Blank -> use 6h shortterm.
+  },
+};
+/* =============================================================== */
+
+const $ = s => document.querySelector(s);
+const app = $('#app');
+let lastCoords = { lat:49.28, lon:-122.79, name:'Coquitlam' };
+
+const SKY_ICON = {
+  clear:['&#9728;&#65039;','&#127769;'], cloud:['&#9925;','&#9729;&#65039;'],
+  rain:['&#127783;&#65039;','&#127783;&#65039;'], snow:['&#10052;&#65039;','&#10052;&#65039;'],
+  storm:['&#9928;&#65039;','&#9928;&#65039;'], fog:['&#127787;&#65039;','&#127787;&#65039;'],
+};
+const skyIcon = (sky,isDay) => (SKY_ICON[sky]||SKY_ICON.cloud)[isDay?0:1];
+
+const GRAD = {
+  day:{ clear:['#3b7dd8','#8fc3f0'], cloud:['#5b6b7d','#96a3b3'], rain:['#3f5566','#6d7f8e'], snow:['#63768a','#aab8c6'], storm:['#2b3440','#5a5f6b'], fog:['#5b6b7d','#96a3b3'] },
+  night:{ clear:['#0e1a33','#2a3a5c'], cloud:['#232c38','#3d4756'], rain:['#1c2733','#374350'], snow:['#28313f','#454f5e'], storm:['#12161d','#2c3038'], fog:['#232c38','#3d4756'] },
+};
+function paint(sky,isDay){ const g=GRAD[isDay?'day':'night'][sky]||GRAD.day.cloud;
+  document.body.style.setProperty('--g-top',g[0]); document.body.style.setProperty('--g-bot',g[1]); }
+
+const WMO = {
+  0:['Clear','clear'],1:['Mainly Clear','clear'],2:['Partly Cloudy','cloud'],3:['Overcast','cloud'],
+  45:['Fog','fog'],48:['Freezing Fog','fog'],51:['Light Drizzle','rain'],53:['Drizzle','rain'],55:['Heavy Drizzle','rain'],
+  56:['Freezing Drizzle','rain'],57:['Freezing Drizzle','rain'],61:['Light Rain','rain'],63:['Rain','rain'],65:['Heavy Rain','rain'],
+  66:['Freezing Rain','rain'],67:['Freezing Rain','rain'],71:['Light Snow','snow'],73:['Snow','snow'],75:['Heavy Snow','snow'],
+  77:['Snow Grains','snow'],80:['Rain Showers','rain'],81:['Rain Showers','rain'],82:['Heavy Showers','rain'],
+  85:['Snow Showers','snow'],86:['Snow Showers','snow'],95:['Thunderstorm','storm'],96:['Thunderstorm','storm'],99:['Thunderstorm','storm'],
+};
+const wmo = c => WMO[c] || ['&#8212;','cloud'];
+
+const rnd = v => (v==null||isNaN(v))?'&#8212;':Math.round(v);
+const clock = iso => { const d=new Date(iso); let h=d.getHours(); const ap=h>=12?'PM':'AM'; h=h%12||12; return h+' '+ap; };
+const dow = iso => new Date(iso+'T00:00').toLocaleDateString('en-CA',{weekday:'short'});
+const timeHM = iso => new Date(iso).toLocaleTimeString('en-CA',{hour:'numeric',minute:'2-digit'});
+const windDir = d => ['N','NE','E','SE','S','SW','W','NW'][Math.round(((d||0)%360)/45)%8];
+const num = s => { if(s==null) return null; const m=String(s).match(/-?\d+(\.\d+)?/); return m?parseFloat(m[0]):null; };
+
+async function fetchGEM(lat,lon,name){
+  const qs = new URLSearchParams({
+    latitude:lat, longitude:lon, models:'gem_seamless',
+    current:'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_direction_10m,visibility',
+    hourly:'temperature_2m,weather_code,precipitation_probability,is_day',
+    daily:'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,precipitation_probability_max,wind_speed_10m_max',
+    timezone:'auto', forecast_days:10, wind_speed_unit:'kmh'
+  }).toString();
+  const r = await fetch('https://api.open-meteo.com/v1/forecast?'+qs);
+  if(!r.ok) throw new Error('GEM '+r.status);
+  return mapGEM(await r.json(), name);
+}
+function mapGEM(d,name){
+  const cur=d.current, hr=d.hourly, dl=d.daily;
+  const now=new Date();
+  let s=hr.time.findIndex(t=>new Date(t)>=new Date(now.getFullYear(),now.getMonth(),now.getDate(),now.getHours()));
+  if(s<0) s=0;
+  const hourly=[];
+  for(let i=s;i<s+24&&i<hr.time.length;i++){ const w=wmo(hr.weather_code[i]); const day=hr.is_day?hr.is_day[i]===1:true;
+    hourly.push({ time:hr.time[i], temp:hr.temperature_2m[i], label:w[0], sky:w[1], isDay:day, pop:hr.precipitation_probability?.[i] }); }
+  const daily=dl.time.map((t,i)=>{ const w=wmo(dl.weather_code[i]);
+    return { date:t, label:w[0], sky:w[1], isDay:true, hi:dl.temperature_2m_max[i], lo:dl.temperature_2m_min[i],
+      sunrise:dl.sunrise?.[i], sunset:dl.sunset?.[i], uv:dl.uv_index_max?.[i], precip:dl.precipitation_sum?.[i],
+      pop:dl.precipitation_probability_max?.[i], windMax:dl.wind_speed_10m_max?.[i] }; });
+  const cw=wmo(cur.weather_code);
+  return {
+    place:name||'Current Location', narrative:'', normal:null, dailyLabel:'10-Day Forecast',
+    current:{ temp:cur.temperature_2m, feelsLike:cur.apparent_temperature, humidity:cur.relative_humidity_2m,
+      label:cw[0], sky:cw[1], isDay:cur.is_day===1, windSpeed:cur.wind_speed_10m, windDir:cur.wind_direction_10m,
+      gust:dl.wind_speed_10m_max?.[0], pressure:cur.surface_pressure, visibility:cur.visibility, cloud:cur.cloud_cover, uv:dl.uv_index_max?.[0] },
+    hourly, daily, source:'Environment Canada GEM model via Open-Meteo (raw model output)'
+  };
+}
+
+function twnSky(bg,text){
+  const s=((bg||'')+' '+(text||'')).toLowerCase();
+  if(/thunder|tstorm/.test(s)) return 'storm';
+  if(/snow|flurr|ice|sleet/.test(s)) return 'snow';
+  if(/rain|shower|drizzle|precip/.test(s)) return 'rain';
+  if(/fog|mist|haze/.test(s)) return 'fog';
+  if(/cloud|overcast/.test(s)) return 'cloud';
+  if(/clear|sunny|sun|fair/.test(s)) return 'clear';
+  return 'cloud';
+}
+const twnIsDay = (bg,iso) => bg ? !/night/i.test(bg) : (()=>{ const h=new Date(iso).getHours(); return h>=6&&h<20; })();
+const kpaToHpa = v => v==null?null:v*10;
+/* TWN period object (shared by /hourly, /shortterm) -> normalized point */
+const twnPoint = p => { const w=p?.weatherCode||{}; return {
+  time:p?.time?.local, temp:p?.temperature?.value, feelsLike:p?.feelsLike, label:w.text,
+  sky:twnSky(w.bgImage,w.text), isDay:twnIsDay(w.bgImage,p?.time?.local), pop:p?.pop,
+  humidity:p?.relativeHumidity, windSpeed:p?.wind?.speed, windDir:p?.wind?.degree, gust:p?.wind?.gust,
+  pressure:kpaToHpa(p?.pressure), cloud:p?.cloudCover }; };
+const getJSON = u => fetch(u).then(r=>{ if(!r.ok) throw new Error('TWN '+r.status); return r.json(); });
+
+/* Parse TWN's hourly page ld+json (CSVW table) into hourly entries (true 1-hour). */
+function parseCSVW(ld){
+  const cols = ld?.mainEntity?.['csvw:tableSchema']?.['csvw:columns'];
+  if(!Array.isArray(cols)) return [];
+  const col={}; for(const c of cols) col[c['csvw:name']]=(c['csvw:cells']||[]).map(x=>x['csvw:value']);
+  return (col.time||[]).map((time,i)=>({
+    time, temp:num(col.temperature?.[i]), feelsLike:num(col.feelsLike?.[i]),
+    label:col.condition?.[i], sky:twnSky(null,col.condition?.[i]), isDay:twnIsDay(null,time),
+    pop:num(col.pop?.[i]),
+  }));
+}
+async function fetchTWNHourly(url){
+  const r=await fetch(url); if(!r.ok) throw new Error('TWN hourly '+r.status);
+  const ct=r.headers.get('content-type')||'';
+  if(ct.includes('json')) return parseCSVW(await r.json());
+  const html=await r.text();
+  const m=html.match(/<script[^>]*hourly-weather-data-set-structured-data[^>]*>([\s\S]*?)<\/script>/);
+  return m ? parseCSVW(JSON.parse(m[1])) : [];
+}
+
+async function fetchTWN(lat,lon,name){
+  const c=CONFIG.twn, b=c.base;
+  if(!c.shortterm) return null;
+  const P=`locale=en-CA&lat=${lat}&long=${lon}&unit=metric`;
+  const now=new Date();
+  const [st,hr,lt,av,hp] = await Promise.all([
+    getJSON(`${b}${c.shortterm}?${P}&count=${c.count||16}`),
+    c.hourly   ? getJSON(`${b}${c.hourly}?${P}&count=24`).catch(()=>null) : null,
+    c.longterm ? getJSON(`${b}${c.longterm}?${P}`).catch(()=>null) : null,
+    c.averages ? getJSON(`${b}${c.averages}?${P}&month=${now.getMonth()+1}&year=${now.getFullYear()}`).catch(()=>null) : null,
+    c.hourlyPage ? fetchTWNHourly(c.hourlyPage.replace('{lat}',lat).replace('{lon}',lon)).catch(()=>null) : null,
+  ]);
+  return mapTWN({ st, hr, lt, av, hp }, name);
+}
+function mapTWN({ st, hr, lt, av, hp }, name){
+  const HR = hr?.hourly || [];            // /hourly (true 1h)
+  const ST = st?.shortTerm || [];         // /shortterm (6h) fallback
+
+  // hourly strip: prefer /hourly JSON, then ld+json page scrape, then 6h shortterm
+  let hourly;
+  if(HR.length) hourly = HR.slice(0,24).map(twnPoint);
+  else if(hp && hp.length) hourly = hp.slice(0,24);
+  else hourly = ST.slice(0,24).map(twnPoint);
+
+  // current: nearest true-hourly point, else nearest shortterm period
+  const cur = twnPoint(HR[0] || ST[0] || {});
+  cur.visibility = null; cur.uv = null;
+
+  // longterm daily (day high / night low)
+  const L = lt?.longTerm || [];
+  const daily = L.slice(0,10).map(d=>{ const day=d.day||{}, night=d.night||{}, w=day.weatherCode||{};
+    return { date:String(d.time?.local ?? '').slice(0,10), label:w.text, sky:twnSky(w.bgImage,w.text), isDay:true,
+      hi:day.temperature?.value, lo:night.temperature?.value, pop:d.pop ?? day.pop,
+      precip:d.rain?.value, windMax:day.wind?.speed, sunrise:null, sunset:null, uv:null }; });
+
+  // today's climate normal
+  let normal=null;
+  if(av?.days){ const t=new Date().toISOString().slice(0,10);
+    const m=av.days.find(x=>String(x.timestamp).slice(0,10)===t) || av.days[new Date().getDate()-1];
+    if(m) normal={ hi:m.temperatureMax, lo:m.temperatureMin }; }
+
+  return {
+    place: name||'Current Location',
+    narrative: '',
+    normal, dailyLabel: daily.length ? `${daily.length}-Day Forecast` : '',
+    current: cur, hourly, daily,
+    source:'The Weather Network / Pelmorex (personal, non-redistributed)'
+  };
+}
+
+async function reverseName(lat,lon){
+  try{ const r=await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+    const j=await r.json(); return j.city||j.locality||j.principalSubdivision||'Current Location'; }
+  catch(e){ return 'Current Location'; }
+}
+
+function render(f){
+  const c=f.current; paint(c.sky,c.isDay);
+  const d0=f.daily[0]||{};
+  const hours=f.hourly.map((h,i)=>`<div class="hour">
+      <div class="h">${i===0?'Now':clock(h.time)}</div>
+      <div class="i">${skyIcon(h.sky,h.isDay)}</div>
+      <div class="p">${h.pop>=15?h.pop+'%':''}</div>
+      <div class="t">${rnd(h.temp)}&deg;</div></div>`).join('');
+  let dailyCard='';
+  if(f.daily.length){
+    const los=f.daily.map(d=>d.lo).filter(v=>v!=null), his=f.daily.map(d=>d.hi).filter(v=>v!=null);
+    const gmin=Math.min(...los), gmax=Math.max(...his), span=Math.max(1,gmax-gmin);
+    const rows=f.daily.map((d,i)=>{
+      const left=d.lo==null?0:((d.lo-gmin)/span)*100, width=(d.lo==null||d.hi==null)?8:Math.max(8,((d.hi-d.lo)/span)*100);
+      return `<div class="day"><div class="dn">${i===0?'Today':dow(d.date)}</div>
+        <div class="di">${skyIcon(d.sky,true)}</div>
+        <div class="track"><div class="fill" style="left:${left}%;width:${width}%"></div></div>
+        <div class="lo">${rnd(d.lo)}&deg;</div><div></div><div class="hi">${rnd(d.hi)}&deg;</div></div>`;
+    }).join('');
+    dailyCard=`<div class="card"><div class="cap">${f.dailyLabel}</div>${rows}</div>`;
+  }
+  const uv=d0.uv, uvNote=uv==null?'':(uv<3?'Low':uv<6?'Moderate':uv<8?'High':uv<11?'Very High':'Extreme');
+  const vis=c.visibility!=null?c.visibility/1000:null;
+  app.innerHTML=`
+    <div class="hero">
+      <div class="city">${f.place}</div>
+      <div class="temp">${rnd(c.temp)}&deg;</div>
+      <div class="cond">${c.label||''}</div>
+      <div class="hl">H:${rnd(d0.hi)}&deg;&nbsp;&nbsp;L:${rnd(d0.lo)}&deg;</div>
+      ${f.normal?`<div style="font-size:13px;color:var(--ink-faint);margin-top:2px">Normal ${rnd(f.normal.hi)}&deg; / ${rnd(f.normal.lo)}&deg;</div>`:''}
+    </div>
+    ${f.narrative?`<div class="card"><div class="cap">Forecast</div><div class="narr">${f.narrative}</div></div>`:''}
+    <div class="card"><div class="cap">Forecast</div><div class="hourly">${hours}</div></div>
+    ${dailyCard}
+    <div class="tiles">
+      <div class="tile"><div class="cap">Feels Like</div><div class="big">${rnd(c.feelsLike)}&deg;</div><div class="note">Actual ${rnd(c.temp)}&deg;</div></div>
+      <div class="tile"><div class="cap">Precip Today</div><div class="big">${d0.precip==null?'&#8212;':(+d0.precip).toFixed(1)} mm</div><div class="note">${d0.pop!=null?d0.pop+'% chance':''}</div></div>
+      <div class="tile"><div class="cap">Wind</div><div class="big">${rnd(c.windSpeed)} <span style="font-size:15px">km/h</span></div><div class="note">${windDir(c.windDir)} &middot; gusts ${rnd(c.gust)}</div></div>
+      <div class="tile"><div class="cap">Humidity</div><div class="big">${rnd(c.humidity)}%</div><div class="note">Cloud ${rnd(c.cloud)}%</div></div>
+      <div class="tile"><div class="cap">UV Index</div><div class="big">${uv==null?'&#8212;':Math.round(uv)}</div><div class="note">${uvNote}</div></div>
+      <div class="tile"><div class="cap">Visibility</div><div class="big">${vis==null?'&#8212;':vis.toFixed(0)} <span style="font-size:15px">km</span></div><div class="note"></div></div>
+      <div class="tile"><div class="cap">Sunrise</div><div class="big">${d0.sunrise?timeHM(d0.sunrise):'&#8212;'}</div><div class="note">${d0.sunset?'Sunset '+timeHM(d0.sunset):''}</div></div>
+      <div class="tile"><div class="cap">Pressure</div><div class="big">${rnd(c.pressure)}</div><div class="note">hPa</div></div>
+    </div>`;
+  $('#foot').innerHTML='Source: '+f.source;
+  enhanceHourly();
+}
+
+function setupCard(){
+  app.innerHTML=`<div class="setup"><b>Connect The Weather Network</b><br><br>
+    Pelmorex's API is public with wildcard CORS &mdash; no proxy, no login. The <code>shortterm</code>,
+    <code>longterm</code> and <code>averages</code> feeds are pre-filled. If this card shows,
+    <code>CONFIG.twn.shortterm</code> is blank &mdash; refill it and reload.</div>`;
+  $('#foot').innerHTML='';
+}
+
+async function load(lat,lon,name){
+  lastCoords={lat,lon,name};
+  app.innerHTML='<div class="msg"><div class="spinner"></div>Loading forecast&#8230;</div>';
+  try{
+    if(!name) name=await reverseName(lat,lon);
+    let f;
+    if(CONFIG.source==='twn'){ f=await fetchTWN(lat,lon,name); if(!f){ setupCard(); return; } }
+    else { f=await fetchGEM(lat,lon,name); }
+    render(f);
+  }catch(e){ app.innerHTML=`<div class="msg">Couldn't load the forecast.<br><small style="color:var(--ink-faint)">${e.message}</small></div>`; }
+}
+
+$('#src-gem').addEventListener('click',()=>{ CONFIG.source='gem'; $('#src-gem').classList.add('on'); $('#src-twn').classList.remove('on'); load(lastCoords.lat,lastCoords.lon,lastCoords.name); });
+$('#src-twn').addEventListener('click',()=>{ CONFIG.source='twn'; $('#src-twn').classList.add('on'); $('#src-gem').classList.remove('on'); load(lastCoords.lat,lastCoords.lon,lastCoords.name); });
+
+function enhanceHourly(){
+  const el=document.querySelector('.hourly'); if(!el) return;
+  el.addEventListener('wheel',e=>{ if(e.deltaY!==0){ el.scrollLeft+=e.deltaY; e.preventDefault(); } },{passive:false});
+  let down=false,sx=0,sl=0;
+  el.addEventListener('pointerdown',e=>{ if(e.pointerType!=='mouse')return; down=true; sx=e.clientX; sl=el.scrollLeft; el.classList.add('drag'); });
+  window.addEventListener('pointermove',e=>{ if(!down)return; el.scrollLeft=sl-(e.clientX-sx); });
+  window.addEventListener('pointerup',()=>{ down=false; el.classList.remove('drag'); });
+}
+
+let tmr;
+$('#q').addEventListener('input',e=>{
+  clearTimeout(tmr); const v=e.target.value.trim();
+  if(v.length<2){ $('#results').style.display='none'; return; }
+  tmr=setTimeout(async()=>{
+    try{ const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(v)}&count=6&language=en&format=json`);
+      const j=await r.json(); const box=$('#results');
+      if(!j.results){ box.style.display='none'; return; }
+      box.innerHTML=j.results.map(p=>{ const sub=[p.admin1,p.country].filter(Boolean).join(', ');
+        return `<button data-lat="${p.latitude}" data-lon="${p.longitude}" data-name="${p.name.replace(/"/g,'')}">${p.name} <span class="sub">${sub}</span></button>`; }).join('');
+      box.style.display='block';
+    }catch(err){}
+  },250);
+});
+$('#results').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return;
+  $('#results').style.display='none'; $('#q').value=b.dataset.name; load(+b.dataset.lat,+b.dataset.lon,b.dataset.name); });
+document.addEventListener('click',e=>{ if(!e.target.closest('.searchbar')) $('#results').style.display='none'; });
+
+$('#geo').addEventListener('click',useGeo);
+function useGeo(){
+  if(!navigator.geolocation){ load(49.28,-122.79,'Coquitlam'); return; }
+  app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
+  navigator.geolocation.getCurrentPosition(
+    p=>load(p.coords.latitude,p.coords.longitude,null),
+    ()=>load(49.28,-122.79,'Coquitlam'),
+    {timeout:8000,maximumAge:600000});
+}
+useGeo();
+</script>
