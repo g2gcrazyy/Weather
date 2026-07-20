@@ -815,8 +815,18 @@ function niceTicks(min,max,want){
   return out;
 }
 const hourOf = iso => { const d=new Date(iso); return isNaN(d)?null:d.getHours(); };
-const tickLabel = iso => { const h=hourOf(iso);
-  return h===0?'12 AM':h===6?'6 AM':h===12?'12 PM':h===18?'6 PM':null; };
+/* Which points get a time label. Six-hourly feeds are offset (01/07/13/19), and a
+   partial day may contain none of the quarter hours — so fall back to evenly spaced
+   labels rather than showing none. Returns a Set of indices. */
+function labelIdx(H){
+  const n=H.length; if(!n) return new Set();
+  if(n<=6) return new Set(H.map((_,i)=>i));            // sparse day: label every point
+  const quarters=H.map((h,i)=>[i,hourOf(h.time)])
+    .filter(([,h])=>h!=null && h%6===0).map(([i])=>i);
+  if(quarters.length>=2) return new Set(quarters);      // clean 12AM/6AM/12PM/6PM
+  const want=Math.min(4,n);                             // otherwise spread ~4 across the day
+  return new Set(Array.from({length:want},(_,k)=>Math.round(k*(n-1)/(want-1))));
+}
 
 function lineChart(H,opts){
   const {key,heading,unit,fixed,colorByValue,stroke,axisMin,axisMax}=opts;
@@ -850,7 +860,8 @@ function lineChart(H,opts){
 
   const grid=ticks.map(t=>`<line x1="${L}" y1="${y(t).toFixed(1)}" x2="${R}" y2="${y(t).toFixed(1)}" stroke="rgba(255,255,255,.10)" stroke-width="1"/>`).join('');
   const axis=ticks.map(t=>`<text x="${AX}" y="${(y(t)+3.5).toFixed(1)}" fill="var(--ink-dim)" font-size="9.5">${Math.round(t)}${unit}</text>`).join('');
-  const times=H.map((h,i)=>{ const lb=tickLabel(h.time); return lb?
+  const LBL=labelIdx(H);
+  const times=H.map((h,i)=>{ const lb=LBL.has(i)?clock(h.time):null; return lb?
     `<line x1="${x(i).toFixed(1)}" y1="${TOP}" x2="${x(i).toFixed(1)}" y2="${TOP+PH}" stroke="rgba(255,255,255,.10)" stroke-width="1"/>
      <text x="${x(i).toFixed(1)}" y="${BOT+13}" text-anchor="middle" fill="var(--ink-dim)" font-size="9.5">${lb}</text>`:''; }).join('');
 
