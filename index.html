@@ -255,7 +255,7 @@
     </div>
     <div class="searchbar">
       <span class="mag">&#8981;</span>
-      <input id="q" type="text" placeholder="Search city or town" autocomplete="off" spellcheck="false">
+      <input id="q" type="text" placeholder="Search city, town or coordinates" autocomplete="off" spellcheck="false">
       <button class="loc" id="clear" title="Clear search" aria-label="Clear search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
           <line x1="6.5" y1="6.5" x2="17.5" y2="17.5"/><line x1="17.5" y1="6.5" x2="6.5" y2="17.5"/></svg>
@@ -282,7 +282,7 @@
       <button class="donebtn" id="sheet-done">Done</button>
     </div>
     <div class="addwrap">
-      <input id="q2" type="text" placeholder="Add a city or town" autocomplete="off" spellcheck="false">
+      <input id="q2" type="text" placeholder="Add a city, town or coordinates" autocomplete="off" spellcheck="false">
       <div class="results" id="results2" style="display:none"></div>
     </div>
     <div id="placelist"></div>
@@ -629,6 +629,44 @@ function sunTimes(date,lat,lng){
   return { sunrise:_fromJ(Jnoon-(Jset-Jnoon)), sunset:_fromJ(Jset) };
 }
 const sunFor = dateStr => sunTimes(new Date(dateStr+'T12:00:00'), lastCoords.lat, lastCoords.lon);
+
+/* Parse typed coordinates. Accepts:
+     49.11, -122.835      49.11 -122.835      49.11N 122.835W
+     49°06'36"N 122°50'06"W      49 6 36 N, 122 50 6 W                        */
+function parseCoords(str){
+  if(!str) return null;
+  const t=String(str).trim().replace(/[()]/g,'');
+  if(!/\d/.test(t)) return null;
+
+  // decimal pair, optional hemisphere letters
+  let m=t.match(/^\s*(-?\d+(?:\.\d+)?)\s*°?\s*([NnSs])?\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*°?\s*([EeWw])?\s*$/);
+  if(m){
+    let la=parseFloat(m[1]), lo=parseFloat(m[3]);
+    if(m[2] && /[Ss]/.test(m[2])) la=-Math.abs(la);
+    if(m[4] && /[Ww]/.test(m[4])) lo=-Math.abs(lo);
+    return valid(la,lo);
+  }
+  // degrees / minutes / seconds
+  const dms=/(-?\d+(?:\.\d+)?)\s*[°d ]\s*(\d+(?:\.\d+)?)?\s*['\u2032m ]?\s*(\d+(?:\.\d+)?)?\s*["\u2033s]?\s*([NSEWnsew])?/g;
+  const hits=[...t.matchAll(dms)].filter(h=>h[0].trim());
+  if(hits.length>=2){
+    const conv=h=>{
+      let v=Math.abs(parseFloat(h[1]))+(parseFloat(h[2])||0)/60+(parseFloat(h[3])||0)/3600;
+      if(parseFloat(h[1])<0 || /[SsWw]/.test(h[4]||'')) v=-v;
+      return v;
+    };
+    let la=conv(hits[0]), lo=conv(hits[1]);
+    if(/[EeWw]/.test(hits[0][4]||'')){ const x=la; la=lo; lo=x; }   // lon given first
+    return valid(la,lo);
+  }
+  return null;
+  function valid(la,lo){
+    if(!isFinite(la)||!isFinite(lo)) return null;
+    if(Math.abs(la)>90 || Math.abs(lo)>180) return null;
+    return { lat:+la.toFixed(5), lon:+lo.toFixed(5) };
+  }
+}
+const coordLabel = c => `${c.lat.toFixed(4)}, ${c.lon.toFixed(4)}`;
 
 const num = s => { if(s==null) return null; const m=String(s).match(/-?\d+(\.\d+)?/); return m?parseFloat(m[0]):null; };
 
@@ -1175,6 +1213,12 @@ let tmr;
 $('#q').addEventListener('input',e=>{
   clearTimeout(tmr); const v=e.target.value.trim();
   if(v.length<2){ $('#results').style.display='none'; return; }
+  const cc=parseCoords(v);
+  if(cc){
+    $('#results').innerHTML=`<button data-lat="${cc.lat}" data-lon="${cc.lon}" data-name="">
+      ${coordLabel(cc)} <span class="sub">Use these coordinates</span></button>`;
+    $('#results').style.display='block'; return;
+  }
   tmr=setTimeout(async()=>{
     try{ const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(v)}&count=6&language=en&format=json`);
       const j=await r.json(); const box=$('#results');
@@ -1186,7 +1230,7 @@ $('#q').addEventListener('input',e=>{
   },250);
 });
 $('#results').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return;
-  closeSearch(); $('#q').value=b.dataset.name; load(+b.dataset.lat,+b.dataset.lon,b.dataset.name); });
+  closeSearch(); $('#q').value=b.dataset.name; load(+b.dataset.lat,+b.dataset.lon,b.dataset.name||null); });
 document.addEventListener('click',e=>{
   if(!e.target.closest('.topbar')) closeSearch();
 });
@@ -1315,6 +1359,12 @@ let tmr2;
 $('#q2').addEventListener('input',e=>{
   clearTimeout(tmr2); const v=e.target.value.trim();
   if(v.length<2){ $('#results2').style.display='none'; return; }
+  const cc=parseCoords(v);
+  if(cc){
+    $('#results2').innerHTML=`<button data-lat="${cc.lat}" data-lon="${cc.lon}" data-name="" data-coord="1">
+      ${coordLabel(cc)} <span class="sub">Add these coordinates</span></button>`;
+    $('#results2').style.display='block'; return;
+  }
   tmr2=setTimeout(async()=>{
     try{ const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(v)}&count=6&language=en&format=json`);
       const j=await r.json(); const box=$('#results2');
@@ -1325,10 +1375,12 @@ $('#q2').addEventListener('input',e=>{
     }catch(err){}
   },250);
 });
-$('#results2').addEventListener('click',e=>{
+$('#results2').addEventListener('click',async e=>{
   const b=e.target.closest('button'); if(!b) return;
-  const pl={lat:+b.dataset.lat, lon:+b.dataset.lon, name:b.dataset.name};
-  addPlace(pl); $('#q2').value=''; $('#results2').style.display='none'; renderPlaces();
+  const lat=+b.dataset.lat, lon=+b.dataset.lon;
+  $('#q2').value=''; $('#results2').style.display='none';
+  const name=b.dataset.name || await reverseName(lat,lon);
+  addPlace({lat,lon,name}); renderPlaces();
 });
 
 /* ============ refresh: on reopen, on a timer, and by pull-down ============ */
