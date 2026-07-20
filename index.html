@@ -13,6 +13,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Weather</title>
+
+<!-- Home-screen / PWA install (relative paths so it works in a GitHub Pages subfolder) -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+<link rel="apple-touch-icon" sizes="167x167" href="icon-167.png">
+<link rel="apple-touch-icon" sizes="152x152" href="icon-152.png">
+<link rel="apple-touch-icon" sizes="120x120" href="icon-120.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Weather">
+<meta name="application-name" content="Weather">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2a4d6e">
 <style>
   :root {
     --ink:#fff; --ink-dim:rgba(255,255,255,.62); --ink-faint:rgba(255,255,255,.38);
@@ -68,19 +83,49 @@
   .hourly::-webkit-scrollbar-track { background:transparent; }
   .hour { flex:0 0 auto; width:58px; text-align:center; }
   .hour .h { font-size:14px; color:var(--ink-dim); font-weight:600; }
-  .hour .i { font-size:24px; margin:7px 0 4px; }
+  .hour .i { margin:6px 0 3px; line-height:0; }
   .hour .t { font-size:18px; font-weight:500; }
   .hour .p { font-size:11px; color:#8fd0ff; height:13px; }
+  .hour.sunev .t { font-size:12px; color:var(--ink-dim); font-weight:600; }
 
-  .day { display:grid; grid-template-columns:46px 30px 1fr 42px 30px 42px; align-items:center; gap:8px; padding:9px 14px; }
-  .day + .day { border-top:1px solid rgba(255,255,255,.08); }
+  .day { display:grid; grid-template-columns:52px 28px 40px 1fr 40px; align-items:center; gap:9px; padding:10px 14px; cursor:pointer; }
+  .day + .day, .dayx + .day { border-top:1px solid rgba(255,255,255,.08); }
+  .day:hover { background:rgba(255,255,255,.06); }
   .day .dn { font-size:17px; font-weight:600; }
-  .day .di { font-size:20px; text-align:center; }
+  .day .di { text-align:center; line-height:0; }
   .day .lo,.day .hi { font-size:17px; }
   .day .lo { color:var(--ink-dim); text-align:right; }
-  .day .hi { text-align:right; }
+  .day .hi { text-align:left; }
   .track { height:5px; border-radius:3px; background:rgba(255,255,255,.18); position:relative; }
   .fill { position:absolute; height:100%; border-radius:3px; background:linear-gradient(90deg,#7bd0ff,#ffd479,#ff8a5c); }
+  .dot { position:absolute; top:50%; width:7px; height:7px; margin:-3.5px 0 0 -3.5px; border-radius:50%; background:#fff; box-shadow:0 0 0 2px rgba(0,0,0,.18); }
+
+  /* expanded day detail */
+  .dayx { padding:2px 14px 14px; background:rgba(0,0,0,.14); }
+  .dayx .cond { font-size:15px; margin:4px 0 10px; }
+  .dayx .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 16px; }
+  .dayx .r { display:flex; justify-content:space-between; font-size:14px; padding:5px 0; border-bottom:1px solid rgba(255,255,255,.08); }
+  .dayx .r span:first-child { color:var(--ink-dim); }
+  .dayx .nohr { font-size:13px; color:var(--ink-faint); padding:10px 0 2px; }
+  .dayx .chart { display:block; width:100%; height:118px; overflow:visible; }
+  .iconrow { position:relative; height:26px; margin:2px 0 -2px; }
+  .iconrow .ic { position:absolute; top:0; transform:translateX(-50%); line-height:0; }
+  .iconrow .ic svg.wx { width:18px; height:18px; }
+  svg.wx { display:inline-block; vertical-align:middle; }
+  .hour .i svg.wx { width:30px; height:30px; }
+  .day .di svg.wx { width:26px; height:26px; }
+  .dayx .cap { font-size:12px; letter-spacing:.6px; text-transform:uppercase; color:var(--ink-dim); }
+
+  /* scrollable charts */
+  .cscroll { overflow-x:auto; cursor:grab; scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.4) transparent; padding:4px 14px 12px; }
+  .cscroll.drag { cursor:grabbing; user-select:none; }
+  .cscroll::-webkit-scrollbar { height:6px; }
+  .cscroll::-webkit-scrollbar-thumb { background:rgba(255,255,255,.4); border-radius:3px; }
+  .cscroll::-webkit-scrollbar-track { background:transparent; }
+  .crow { display:flex; }
+  .crow > div { flex:0 0 auto; text-align:center; }
+  .ctime { font-size:13px; color:var(--ink-dim); font-weight:600; padding-bottom:3px; }
+  .cicon { font-size:21px; padding-bottom:2px; }
 
   .tiles { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
   .tile { background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
@@ -102,8 +147,8 @@
 
 <div class="wrap">
   <div class="srcbar">
-    <button id="src-gem" class="on">GEM (Env. Canada)</button>
-    <button id="src-twn">Weather Network</button>
+    <button id="src-gem">GEM (Env. Canada)</button>
+    <button id="src-twn" class="on">Weather Network</button>
   </div>
   <div class="searchbar">
     <span class="mag">&#8981;</span>
@@ -118,14 +163,17 @@
 <script>
 /* ============================ CONFIG ============================ */
 const CONFIG = {
-  source: 'gem',            // 'gem' works now. Click "Weather Network" or set to 'twn'.
+  source: 'twn',            // default: The Weather Network (overridden by saved preference)
   twn: {                    // Pelmorex API — public, wildcard CORS, no proxy, no login.
     base: 'https://weatherapi.pelmorex.com/api/v1',
     shortterm: '/shortterm',                    // 6-hourly (fallback for the strip / current)
     hourly:    '/hourly',                        // TRUE 1-hourly JSON, wildcard CORS, no proxy
+    observation: '/observation',                 // live measured current conditions (best "now")
     longterm:  '/longterm',                     // 7/14-day (paste its response to finalize mapping)
     averages:  '/historical/averages/daily',    // climate normals -> "normal" line
-    count: 16,                                   // shortterm periods (16 x 6h ~= 4 days)
+    count: 40,                                   // shortterm periods (40 x 6h = 10 days) -> per-day charts beyond 72h
+    hourCount: 72,                               // hours to pull from /hourly (feeds per-day charts)
+    minCount: 28,                                // never fewer than 28 periods (7 days x 4) of 6h data
     hourlyPage: '',                              // OPTIONAL true-hourly: URL that returns the TWN hourly
                                                  //   PAGE (its <script ld+json> holds 72x1h). Needs a proxy
                                                  //   (main site isn't wildcard-CORS). Blank -> use 6h shortterm.
@@ -135,14 +183,80 @@ const CONFIG = {
 
 const $ = s => document.querySelector(s);
 const app = $('#app');
-let lastCoords = { lat:49.28, lon:-122.79, name:'Coquitlam' };
+let lastCoords = { lat:null, lon:null, name:null };
+let CURRENT_F = null;
 
-const SKY_ICON = {
-  clear:['&#9728;&#65039;','&#127769;'], cloud:['&#9925;','&#9729;&#65039;'],
-  rain:['&#127783;&#65039;','&#127783;&#65039;'], snow:['&#10052;&#65039;','&#10052;&#65039;'],
-  storm:['&#9928;&#65039;','&#9928;&#65039;'], fog:['&#127787;&#65039;','&#127787;&#65039;'],
+/* ---- saved preferences (source + last city). Falls back to memory if storage is blocked. ---- */
+const PREF_KEY='weatherapp.prefs';
+let memPrefs=null;
+function loadPrefs(){
+  if(memPrefs) return memPrefs;
+  try{ const raw=localStorage.getItem(PREF_KEY); memPrefs=raw?JSON.parse(raw):{}; }
+  catch(e){ memPrefs={}; }
+  return memPrefs;
+}
+function savePrefs(p){
+  memPrefs={...loadPrefs(),...p};
+  try{ localStorage.setItem(PREF_KEY,JSON.stringify(memPrefs)); }catch(e){}
+}
+
+/* Custom SVG weather icons (original artwork, drawn to sit with the app's style). */
+const ICO = {
+  sun:`<circle cx="16" cy="16" r="6.4" fill="url(#gsun)"/>`+
+      [0,45,90,135,180,225,270,315].map(a=>`<rect x="15.1" y="1.6" width="1.8" height="4.4" rx=".9" fill="#ffcf4d" transform="rotate(${a} 16 16)"/>`).join(''),
+  moon:`<path d="M21.6 19.9A8.2 8.2 0 0 1 12.1 8.5a8.6 8.6 0 1 0 9.5 11.4z" fill="url(#gmoon)"/>`,
+  cloud:(x,y,sc,a,b)=>`<g transform="translate(${x} ${y}) scale(${sc})"><path d="M8.6 22.4a5.1 5.1 0 0 1-.5-10.1 7.3 7.3 0 0 1 13.9-1.6 4.6 4.6 0 0 1 1.2 11.7z" fill="url(#${a})" stroke="${b}" stroke-width=".7"/></g>`,
 };
-const skyIcon = (sky,isDay) => (SKY_ICON[sky]||SKY_ICON.cloud)[isDay?0:1];
+function svgIcon(inner,extraDefs){
+  return `<svg class="wx" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><defs>
+    <linearGradient id="gsun" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#ffe08a"/><stop offset="100%" stop-color="#ffb531"/></linearGradient>
+    <linearGradient id="gmoon" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fdfdff"/><stop offset="100%" stop-color="#c9d4e8"/></linearGradient>
+    <linearGradient id="gcl" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#ffffff"/><stop offset="100%" stop-color="#d3dced"/></linearGradient>
+    <linearGradient id="gcd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#c3ccdc"/><stop offset="100%" stop-color="#93a0b5"/></linearGradient>
+    ${extraDefs||''}</defs>${inner}</svg>`;
+}
+const drop=(x,y,c)=>`<path d="M${x} ${y}c1.5 1.9 2.2 3 2.2 3.9a2.2 2.2 0 0 1-4.4 0c0-.9.7-2 2.2-3.9z" fill="${c}"/>`;
+const flake=(x,y)=>`<g stroke="#dff0ff" stroke-width="1.5" stroke-linecap="round">
+  <line x1="${x}" y1="${y-2.2}" x2="${x}" y2="${y+2.2}"/>
+  <line x1="${x-1.9}" y1="${y-1.1}" x2="${x+1.9}" y2="${y+1.1}"/>
+  <line x1="${x-1.9}" y1="${y+1.1}" x2="${x+1.9}" y2="${y-1.1}"/></g>`;
+
+const SKY_SVG = {
+  clear:  d => d ? svgIcon(ICO.sun) : svgIcon(ICO.moon),
+  cloud:  d => svgIcon(
+    (d ? `<g transform="translate(6 -3) scale(.62)">${ICO.sun}</g>`
+       : `<g transform="translate(7 -2) scale(.62)">${ICO.moon}</g>`)
+    + ICO.cloud(0,3,1,'gcl','rgba(120,135,160,.35)')),
+  overcast: () => svgIcon(
+    `<g opacity=".55" transform="translate(4 -3.5) scale(.8)">${ICO.cloud(0,3,1,'gcd','none')}</g>`
+    + ICO.cloud(0,4,1,'gcl','rgba(120,135,160,.35)')),
+  rain:   () => svgIcon(ICO.cloud(0,-1,1,'gcd','none')
+    + drop(10.5,22,'#7ec6ff') + drop(16,23.5,'#7ec6ff') + drop(21.5,22,'#7ec6ff')),
+  snow:   () => svgIcon(ICO.cloud(0,-1,1,'gcd','none')
+    + flake(10.5,24) + flake(16,25.6) + flake(21.5,24)),
+  storm:  () => svgIcon(ICO.cloud(0,-2,1,'gcd','none')
+    + `<path d="M17.4 19.2 12.6 26h3.3l-1.1 5 5.3-7.6h-3.4z" fill="#ffd257"/>`),
+  fog:    () => svgIcon(ICO.cloud(0,-3,1,'gcl','rgba(120,135,160,.35)')
+    + `<g stroke="#cfd9e8" stroke-width="1.9" stroke-linecap="round" opacity=".85">
+        <line x1="7" y1="23.5" x2="25" y2="23.5"/><line x1="9.5" y1="27.5" x2="22.5" y2="27.5"/></g>`),
+};
+const SUN_EV = up => svgIcon(
+  `<g transform="translate(0 3)">
+     <path d="M16 4.5 11.2 10h3.3v5h3v-5h3.3z" fill="url(#gsun)" transform="${up?'':'rotate(180 16 9)'}"/>
+     <circle cx="16" cy="20.5" r="4.2" fill="url(#gsun)" opacity=".95"/>
+     <line x1="6" y1="26.5" x2="26" y2="26.5" stroke="#ffcf4d" stroke-width="2" stroke-linecap="round"/>
+   </g>`);
+
+function skyIcon(sky,isDay){
+  const f = SKY_SVG[sky==='cloud' ? 'cloud' : sky] || SKY_SVG.cloud;
+  return f(!!isDay);
+}
+/* overcast gets its own flatter art when the label says so */
+function skyIconFor(sky,isDay,label){
+  if(sky==='cloud' && /overcast|cloudy/i.test(label||'') && !/sun|clear|break|mix/i.test(label||''))
+    return SKY_SVG.overcast(isDay);
+  return skyIcon(sky,isDay);
+}
 
 const GRAD = {
   day:{ clear:['#3b7dd8','#8fc3f0'], cloud:['#5b6b7d','#96a3b3'], rain:['#3f5566','#6d7f8e'], snow:['#63768a','#aab8c6'], storm:['#2b3440','#5a5f6b'], fog:['#5b6b7d','#96a3b3'] },
@@ -164,8 +278,30 @@ const wmo = c => WMO[c] || ['&#8212;','cloud'];
 const rnd = v => (v==null||isNaN(v))?'&#8212;':Math.round(v);
 const clock = iso => { const d=new Date(iso); let h=d.getHours(); const ap=h>=12?'PM':'AM'; h=h%12||12; return h+' '+ap; };
 const dow = iso => new Date(iso+'T00:00').toLocaleDateString('en-CA',{weekday:'short'});
-const timeHM = iso => new Date(iso).toLocaleTimeString('en-CA',{hour:'numeric',minute:'2-digit'});
-const windDir = d => ['N','NE','E','SE','S','SW','W','NW'][Math.round(((d||0)%360)/45)%8];
+const timeHM = iso => { const d=new Date(iso); if(isNaN(d)) return '';
+  let h=d.getHours(); const ap=h>=12?'PM':'AM'; h=h%12||12;
+  return h+':'+String(d.getMinutes()).padStart(2,'0')+ap; };
+const windDir = d => (d==null) ? '' : (typeof d==='string' ? d : ['N','NE','E','SE','S','SW','W','NW'][Math.round((((d%360)+360)%360)/45)%8]);
+/* ---- sunrise/sunset from lat/lon (NOAA/SunCalc method) — TWN feeds don't supply them ---- */
+const _rad=Math.PI/180, _dayMs=864e5, _J1970=2440588, _J2000=2451545, _e=_rad*23.4397, _J0=0.0009;
+const _toDays=d=>(d.valueOf()/_dayMs-0.5+_J1970)-_J2000;
+const _fromJ=j=>new Date((j+0.5-_J1970)*_dayMs);
+const _M=d=>_rad*(357.5291+0.98560028*d);
+const _L=M=>M+_rad*(1.9148*Math.sin(M)+0.02*Math.sin(2*M)+0.0003*Math.sin(3*M))+_rad*102.9372+Math.PI;
+const _dec=L=>Math.asin(Math.sin(_e)*Math.sin(L));
+const _tr=(Ht,lw,n)=>_J0+(Ht+lw)/(2*Math.PI)+n;
+const _stJ=(ds,M,L)=>_J2000+ds+0.0053*Math.sin(M)-0.0069*Math.sin(2*L);
+function sunTimes(date,lat,lng){
+  if(lat==null||lng==null) return {sunrise:null,sunset:null};
+  const lw=_rad*-lng, phi=_rad*lat, d=_toDays(date), n=Math.round(d-_J0-lw/(2*Math.PI));
+  const ds=_tr(0,lw,n), M=_M(ds), L=_L(M), dec=_dec(L), Jnoon=_stJ(ds,M,L);
+  const w=Math.acos((Math.sin(-0.833*_rad)-Math.sin(phi)*Math.sin(dec))/(Math.cos(phi)*Math.cos(dec)));
+  if(isNaN(w)) return {sunrise:null,sunset:null};          // polar day/night
+  const Jset=_stJ(_tr(w,lw,n),M,L);
+  return { sunrise:_fromJ(Jnoon-(Jset-Jnoon)), sunset:_fromJ(Jset) };
+}
+const sunFor = dateStr => sunTimes(new Date(dateStr+'T12:00:00'), lastCoords.lat, lastCoords.lon);
+
 const num = s => { if(s==null) return null; const m=String(s).match(/-?\d+(\.\d+)?/); return m?parseFloat(m[0]):null; };
 
 async function fetchGEM(lat,lon,name){
@@ -186,7 +322,7 @@ function mapGEM(d,name){
   let s=hr.time.findIndex(t=>new Date(t)>=new Date(now.getFullYear(),now.getMonth(),now.getDate(),now.getHours()));
   if(s<0) s=0;
   const hourly=[];
-  for(let i=s;i<s+24&&i<hr.time.length;i++){ const w=wmo(hr.weather_code[i]); const day=hr.is_day?hr.is_day[i]===1:true;
+  for(let i=s;i<hr.time.length;i++){ const w=wmo(hr.weather_code[i]); const day=hr.is_day?hr.is_day[i]===1:true;
     hourly.push({ time:hr.time[i], temp:hr.temperature_2m[i], label:w[0], sky:w[1], isDay:day, pop:hr.precipitation_probability?.[i] }); }
   const daily=dl.time.map((t,i)=>{ const w=wmo(dl.weather_code[i]);
     return { date:t, label:w[0], sky:w[1], isDay:true, hi:dl.temperature_2m_max[i], lo:dl.temperature_2m_min[i],
@@ -197,8 +333,8 @@ function mapGEM(d,name){
     place:name||'Current Location', narrative:'', normal:null, dailyLabel:'10-Day Forecast',
     current:{ temp:cur.temperature_2m, feelsLike:cur.apparent_temperature, humidity:cur.relative_humidity_2m,
       label:cw[0], sky:cw[1], isDay:cur.is_day===1, windSpeed:cur.wind_speed_10m, windDir:cur.wind_direction_10m,
-      gust:dl.wind_speed_10m_max?.[0], pressure:cur.surface_pressure, visibility:cur.visibility, cloud:cur.cloud_cover, uv:dl.uv_index_max?.[0] },
-    hourly, daily, source:'Environment Canada GEM model via Open-Meteo (raw model output)'
+      gust:dl.wind_speed_10m_max?.[0], pressure:cur.surface_pressure, visibility:(cur.visibility!=null?cur.visibility/1000:null), cloud:cur.cloud_cover, uv:dl.uv_index_max?.[0] },
+    hourly, daily, periods:[], source:'Environment Canada GEM model via Open-Meteo (raw model output)'
   };
 }
 
@@ -218,9 +354,29 @@ const kpaToHpa = v => v==null?null:v*10;
 const twnPoint = p => { const w=p?.weatherCode||{}; return {
   time:p?.time?.local, temp:p?.temperature?.value, feelsLike:p?.feelsLike, label:w.text,
   sky:twnSky(w.bgImage,w.text), isDay:twnIsDay(w.bgImage,p?.time?.local), pop:p?.pop,
-  humidity:p?.relativeHumidity, windSpeed:p?.wind?.speed, windDir:p?.wind?.degree, gust:p?.wind?.gust,
-  pressure:kpaToHpa(p?.pressure), cloud:p?.cloudCover }; };
+  humidity:p?.relativeHumidity, windSpeed:p?.wind?.speed, windDir:p?.wind?.direction, gust:p?.wind?.gust,
+  pressure:kpaToHpa(p?.pressure), cloud:p?.cloudCover, visibility:null, dewPoint:p?.dewPoint }; };
+/* TWN /observation object (flat temp, bgimage lowercase, pressure{value}, visibility in km) */
+const twnObs = o => { const w=o?.weatherCode||{}; const bg=w.bgimage||w.bgImage; return {
+  time:o?.time?.local, temp:o?.temperature, feelsLike:o?.feelsLike, dewPoint:o?.dewPoint, label:w.text,
+  sky:twnSky(bg,w.text), isDay:twnIsDay(bg,o?.time?.local), humidity:o?.relativeHumidity,
+  windSpeed:o?.wind?.speed, windDir:o?.wind?.direction, gust:o?.wind?.gust,
+  pressure:kpaToHpa(o?.pressure?.value), visibility:o?.visibility, cloud:null, uv:null }; };
 const getJSON = u => fetch(u).then(r=>{ if(!r.ok) throw new Error('TWN '+r.status); return r.json(); });
+/* Some Pelmorex endpoints cap `count` and 400 on large values.
+   Try the requested count, then progressively smaller, then no count at all. */
+async function getCounted(base, counts){
+  for(const c of counts){
+    try{
+      const r = await getJSON(c==null ? base : `${base}&count=${c}`);
+      if(c!==counts[0]) console.warn('[weather] count',counts[0],'rejected; using',c,'for',base);
+      return r;
+    }
+    catch(e){ if(!/\b400\b/.test(e.message)) throw e; }
+  }
+  console.warn('[weather] all counts rejected for',base);
+  return null;
+}
 
 /* Parse TWN's hourly page ld+json (CSVW table) into hourly entries (true 1-hour). */
 function parseCSVW(ld){
@@ -247,28 +403,33 @@ async function fetchTWN(lat,lon,name){
   if(!c.shortterm) return null;
   const P=`locale=en-CA&lat=${lat}&long=${lon}&unit=metric`;
   const now=new Date();
-  const [st,hr,lt,av,hp] = await Promise.all([
-    getJSON(`${b}${c.shortterm}?${P}&count=${c.count||16}`),
-    c.hourly   ? getJSON(`${b}${c.hourly}?${P}&count=24`).catch(()=>null) : null,
+  const [st,hr,ob,lt,av,hp] = await Promise.all([
+    getCounted(`${b}${c.shortterm}?${P}`, [c.count||40, 32, c.minCount||28, null]).catch(()=>null),
+    c.hourly   ? getCounted(`${b}${c.hourly}?${P}`, [c.hourCount||72, 48, 24, null]).catch(()=>null) : null,
+    c.observation ? getJSON(`${b}${c.observation}?${P}`).catch(()=>null) : null,
     c.longterm ? getJSON(`${b}${c.longterm}?${P}`).catch(()=>null) : null,
     c.averages ? getJSON(`${b}${c.averages}?${P}&month=${now.getMonth()+1}&year=${now.getFullYear()}`).catch(()=>null) : null,
     c.hourlyPage ? fetchTWNHourly(c.hourlyPage.replace('{lat}',lat).replace('{lon}',lon)).catch(()=>null) : null,
   ]);
-  return mapTWN({ st, hr, lt, av, hp }, name);
+  return mapTWN({ st, hr, ob, lt, av, hp }, name);
 }
-function mapTWN({ st, hr, lt, av, hp }, name){
+function mapTWN({ st, hr, ob, lt, av, hp }, name){
   const HR = hr?.hourly || [];            // /hourly (true 1h)
   const ST = st?.shortTerm || [];         // /shortterm (6h) fallback
 
   // hourly strip: prefer /hourly JSON, then ld+json page scrape, then 6h shortterm
   let hourly;
-  if(HR.length) hourly = HR.slice(0,24).map(twnPoint);
-  else if(hp && hp.length) hourly = hp.slice(0,24);
-  else hourly = ST.slice(0,24).map(twnPoint);
+  if(HR.length) hourly = HR.map(twnPoint);
+  else if(hp && hp.length) hourly = hp.slice();
+  else hourly = ST.map(twnPoint);
 
-  // current: nearest true-hourly point, else nearest shortterm period
-  const cur = twnPoint(HR[0] || ST[0] || {});
-  cur.visibility = null; cur.uv = null;
+  // current: prefer LIVE measured observation, else nearest forecast hour
+  if(!st && !hr && !ob && !lt) throw new Error('TWN: no feed responded');
+  const O = ob?.observation;
+  const cur = O ? twnObs(O) : twnPoint(HR[0] || ST[0] || {});
+  if(cur.pop == null) cur.pop = HR[0]?.pop;      // observation has no POP
+  if(cur.cloud == null) cur.cloud = HR[0]?.cloudCover;
+  cur.uv = null;
 
   // longterm daily (day high / night low)
   const L = lt?.longTerm || [];
@@ -288,39 +449,207 @@ function mapTWN({ st, hr, lt, av, hp }, name){
     narrative: '',
     normal, dailyLabel: daily.length ? `${daily.length}-Day Forecast` : '',
     current: cur, hourly, daily,
+    periods: ST.map(twnPoint),          // 6h periods, 10 days — fallback for days beyond /hourly
     source:'The Weather Network / Pelmorex (personal, non-redistributed)'
   };
 }
 
+/* Reverse geocode -> a CITY name. BigDataCloud's `city`/`locality` can return a regional
+   district ("Metro Vancouver"), so prefer the finer administrative levels first. */
+const BAD_PLACE=/regional district|metro |metropolitan|census|division|unorganized/i;
 async function reverseName(lat,lon){
-  try{ const r=await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
-    const j=await r.json(); return j.city||j.locality||j.principalSubdivision||'Current Location'; }
-  catch(e){ return 'Current Location'; }
+  try{
+    const r=await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+    const j=await r.json();
+    const admin=(j.localityInfo?.administrative||[])
+      .filter(a=>a.name && !BAD_PLACE.test(a.name))
+      .sort((a,b)=>(b.adminLevel||0)-(a.adminLevel||0));   // most specific first
+    const cands=[...admin.map(a=>a.name), j.city, j.locality, j.principalSubdivision];
+    return cands.find(n=>n && !BAD_PLACE.test(n)) || 'Current Location';
+  }catch(e){ return 'Current Location'; }
+}
+
+/* IP-based location — what The Weather Network uses. No permission prompt, city-accurate. */
+async function ipLocate(){
+  const tries=[
+    ['https://ipwho.is/', j=> j&&j.success!==false&&j.latitude!=null ? {lat:j.latitude, lon:j.longitude, name:j.city} : null],
+    ['https://ipapi.co/json/', j=> j&&j.latitude!=null ? {lat:j.latitude, lon:j.longitude, name:j.city} : null],
+    ['https://get.geojs.io/v1/ip/geo.json', j=> j&&j.latitude!=null ? {lat:+j.latitude, lon:+j.longitude, name:j.city} : null],
+  ];
+  for(const [url,pick] of tries){
+    try{
+      const r=await fetch(url); if(!r.ok) continue;
+      const v=pick(await r.json());
+      if(v && isFinite(v.lat) && isFinite(v.lon)) return v;
+    }catch(e){}
+  }
+  return null;
+}
+
+/* Build fit-to-width charts: temperature (heat-coloured) + precipitation chance.
+   Both are line graphs with shaded area, sparse time labels, and a labelled right axis. */
+const HEAT=[[-25,240],[-10,220],[0,200],[8,165],[15,95],[21,55],[27,30],[35,0]];  // degC -> hue
+function tempColor(t){                       // cold blue -> hot red
+  const c=(t==null?10:t);
+  if(c<=HEAT[0][0]) return `hsl(${HEAT[0][1]},85%,62%)`;
+  for(let i=1;i<HEAT.length;i++){
+    if(c<=HEAT[i][0]){
+      const [a,ha]=HEAT[i-1], [b,hb]=HEAT[i];
+      const hue=ha+((c-a)/(b-a))*(hb-ha);
+      return `hsl(${hue.toFixed(0)},85%,62%)`;
+    }
+  }
+  return `hsl(0,85%,62%)`;
+}
+function niceTicks(min,max,want){
+  const span=Math.max(1e-6,max-min), raw=span/Math.max(1,want-1);
+  const mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const step=[1,2,2.5,5,10].map(m=>m*mag).find(v=>v>=raw)||10*mag;
+  const lo=Math.floor(min/step)*step, hi=Math.ceil(max/step)*step;
+  const out=[]; for(let v=lo;v<=hi+step/2;v+=step) out.push(+v.toFixed(6));
+  return out;
+}
+const hourOf = iso => { const d=new Date(iso); return isNaN(d)?null:d.getHours(); };
+const tickLabel = iso => { const h=hourOf(iso);
+  return h===0?'12 AM':h===6?'6 AM':h===12?'12 PM':h===18?'6 PM':null; };
+
+function lineChart(H,opts){
+  const {key,heading,unit,fixed,colorByValue,stroke,axisMin,axisMax}=opts;
+  const vals=H.map(h=>h[key]).filter(v=>v!=null);
+  if(vals.length<2) return '';
+  const VW=340, L=6, R=298, AX=304;            // plot area + axis label column
+  const TOP=8, PH=78, BOT=PH+TOP, VH=BOT+18;   // plot band + room for time labels
+  let vmin = axisMin!=null?axisMin:Math.min(...vals);
+  let vmax = axisMax!=null?axisMax:Math.max(...vals);
+  if(axisMin==null && axisMax==null){ const pad=Math.max(1,(vmax-vmin)*0.15); vmin-=pad; vmax+=pad; }
+  const ticks = fixed || niceTicks(vmin,vmax,4);
+  vmin=Math.min(vmin,...ticks); vmax=Math.max(vmax,...ticks);
+  const span=Math.max(1e-6,vmax-vmin);
+  const n=H.length;
+  const x=i=>L+(n===1?0:(i/(n-1))*(R-L));
+  const y=v=>TOP+PH-((v-vmin)/span)*PH;
+
+  const pts=H.map((h,i)=>h[key]==null?null:[x(i),y(h[key]),h[key]]).filter(Boolean);
+  const line=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  const area=line+` L${pts[pts.length-1][0].toFixed(1)} ${TOP+PH} L${pts[0][0].toFixed(1)} ${TOP+PH} Z`;
+  const uid='c'+Math.random().toString(36).slice(2,8);
+
+  // stroke: either a value-mapped gradient (temperature) or a flat colour
+  let strokeDef='', strokeRef=stroke||'#8fd0ff';
+  if(colorByValue){
+    const stops=pts.map((p,i)=>`<stop offset="${(pts.length===1?0:i/(pts.length-1))*100}%" stop-color="${tempColor(p[2])}"/>`).join('');
+    strokeDef=`<linearGradient id="s${uid}" gradientUnits="userSpaceOnUse" x1="${L}" y1="0" x2="${R}" y2="0">${stops}</linearGradient>`;
+    strokeRef=`url(#s${uid})`;
+  }
+  const fillTop = colorByValue ? tempColor(Math.max(...vals)) : (stroke||'#8fd0ff');
+
+  const grid=ticks.map(t=>`<line x1="${L}" y1="${y(t).toFixed(1)}" x2="${R}" y2="${y(t).toFixed(1)}" stroke="rgba(255,255,255,.10)" stroke-width="1"/>`).join('');
+  const axis=ticks.map(t=>`<text x="${AX}" y="${(y(t)+3.5).toFixed(1)}" fill="var(--ink-dim)" font-size="9.5">${Math.round(t)}${unit}</text>`).join('');
+  const times=H.map((h,i)=>{ const lb=tickLabel(h.time); return lb?
+    `<line x1="${x(i).toFixed(1)}" y1="${TOP}" x2="${x(i).toFixed(1)}" y2="${TOP+PH}" stroke="rgba(255,255,255,.10)" stroke-width="1"/>
+     <text x="${x(i).toFixed(1)}" y="${BOT+13}" text-anchor="middle" fill="var(--ink-dim)" font-size="9.5">${lb}</text>`:''; }).join('');
+
+  return `<div class="cap" style="padding:10px 0 2px">${heading}</div>
+    <svg class="chart" viewBox="0 0 ${VW} ${VH}" preserveAspectRatio="none">
+      <defs>${strokeDef}
+        <linearGradient id="f${uid}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${fillTop}" stop-opacity=".40"/>
+          <stop offset="100%" stop-color="${fillTop}" stop-opacity="0"/>
+        </linearGradient></defs>
+      ${grid}${times}
+      <path d="${area}" fill="url(#f${uid})"/>
+      <path d="${line}" fill="none" stroke="${strokeRef}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      ${axis}
+    </svg>`;
+}
+
+/* Row of weather icons above the temp graph — 12 of them (one per 2 hours on a 24h day),
+   positioned to line up with the chart's x-scale. */
+function iconRow(H){
+  const n=H.length; if(!n) return '';
+  const VW=340, L=6, R=298;
+  // Select by CLOCK TIME, not index: one icon every 2 hours. A partial day simply gets
+  // fewer icons at correct spacing, instead of 12 crammed into a short span.
+  const hr=t=>{ const v=+String(t).slice(11,13); return isNaN(v)?null:v; };
+  let idx=H.map((h,i)=>i).filter(i=>{ const h=hr(H[i].time); return h!=null && h%2===0; });
+  if(!idx.length) idx=H.map((_,i)=>i);              // odd/unknown timestamps: fall back to all
+  if(idx.length>12){                                 // never more than 12
+    const step=idx.length/12;
+    idx=Array.from({length:12},(_,k)=>idx[Math.floor(k*step)]);
+  }
+  const cells=idx.map(i=>{
+    const x=L+(n===1?0:(i/(n-1))*(R-L));
+    return `<div class="ic" style="left:${(x/VW*100).toFixed(3)}%">${skyIconFor(H[i].sky,H[i].isDay,H[i].label)}</div>`;
+  }).join('');
+  return `<div class="iconrow">${cells}</div>`;
+}
+
+function lineChartWithIcons(H,opts){
+  const svg=lineChart(H,opts);
+  if(!svg) return '';
+  const capEnd=svg.indexOf('</div>')+6;                 // insert icons just after the heading
+  return svg.slice(0,capEnd)+iconRow(H)+svg.slice(capEnd);
+}
+
+function buildCharts(H,heading){
+  if(!H || H.length<2) return '';
+  const t=lineChartWithIcons(H,{ key:'temp', heading:(heading||'Hourly')+' \u00b7 Temperature', unit:'\u00b0', colorByValue:true });
+  const p=H.some(h=>h.pop!=null)
+    ? lineChart(H,{ key:'pop', heading:'Chance of Precipitation', unit:'%', stroke:'#8fd0ff',
+                    axisMin:0, axisMax:100, fixed:[0,25,50,75,100] })
+    : '';
+  return t+p;
 }
 
 function render(f){
   const c=f.current; paint(c.sky,c.isDay);
   const d0=f.daily[0]||{};
-  const hours=f.hourly.map((h,i)=>`<div class="hour">
-      <div class="h">${i===0?'Now':clock(h.time)}</div>
-      <div class="i">${skyIcon(h.sky,h.isDay)}</div>
-      <div class="p">${h.pop>=15?h.pop+'%':''}</div>
-      <div class="t">${rnd(h.temp)}&deg;</div></div>`).join('');
+  /* ---- daily rows: lo and hi flanking the bar, click to expand ---- */
   let dailyCard='';
   if(f.daily.length){
     const los=f.daily.map(d=>d.lo).filter(v=>v!=null), his=f.daily.map(d=>d.hi).filter(v=>v!=null);
     const gmin=Math.min(...los), gmax=Math.max(...his), span=Math.max(1,gmax-gmin);
+    const nowT=f.current.temp;
     const rows=f.daily.map((d,i)=>{
       const left=d.lo==null?0:((d.lo-gmin)/span)*100, width=(d.lo==null||d.hi==null)?8:Math.max(8,((d.hi-d.lo)/span)*100);
-      return `<div class="day"><div class="dn">${i===0?'Today':dow(d.date)}</div>
-        <div class="di">${skyIcon(d.sky,true)}</div>
-        <div class="track"><div class="fill" style="left:${left}%;width:${width}%"></div></div>
-        <div class="lo">${rnd(d.lo)}&deg;</div><div></div><div class="hi">${rnd(d.hi)}&deg;</div></div>`;
+      const dotPct=(i===0&&nowT!=null&&d.lo!=null&&d.hi!=null&&nowT>=d.lo&&nowT<=d.hi)?((nowT-gmin)/span)*100:null;
+      return `<div class="day" data-i="${i}"><div class="dn">${i===0?'Today':dow(d.date)}</div>
+        <div class="di">${skyIconFor(d.sky,true,d.label)}</div>
+        <div class="lo">${rnd(d.lo)}&deg;</div>
+        <div class="track"><div class="fill" style="left:${left}%;width:${width}%"></div>${dotPct!=null?`<div class="dot" style="left:${dotPct}%"></div>`:''}</div>
+        <div class="hi">${rnd(d.hi)}&deg;</div></div>
+        <div class="dayx" id="dx${i}" style="display:none"></div>`;
     }).join('');
     dailyCard=`<div class="card"><div class="cap">${f.dailyLabel}</div>${rows}</div>`;
   }
+
+  const H24=f.hourly.slice(0,24);
+  const items=H24.map((h,i)=>({ t:new Date(h.time).getTime(), kind:'hour', h, i }));
+  if(H24.length){
+    const t0=items[0].t, tN=items[items.length-1].t;
+    const dates=[...new Set(H24.map(h=>String(h.time).slice(0,10)))];
+    for(const dstr of dates){
+      const st=sunFor(dstr);
+      for(const [k,v] of [['Sunrise',st.sunrise],['Sunset',st.sunset]]){
+        if(v && v.getTime()>=t0 && v.getTime()<=tN) items.push({ t:v.getTime(), kind:'sun', k, v });
+      }
+    }
+    items.sort((a,b)=>a.t-b.t);
+  }
+  const strip=items.map(it=> it.kind==='hour'
+    ? `<div class="hour">
+        <div class="h">${it.i===0?'Now':clock(it.h.time)}</div>
+        <div class="i">${skyIconFor(it.h.sky,it.h.isDay,it.h.label)}</div>
+        <div class="p">${it.h.pop>=15?it.h.pop+'%':''}</div>
+        <div class="t">${rnd(it.h.temp)}&deg;</div></div>`
+    : `<div class="hour sunev">
+        <div class="h">${timeHM(it.v)}</div>
+        <div class="i">${SUN_EV(it.k==='Sunrise')}</div>
+        <div class="p"></div>
+        <div class="t">${it.k}</div></div>`).join('');
+
   const uv=d0.uv, uvNote=uv==null?'':(uv<3?'Low':uv<6?'Moderate':uv<8?'High':uv<11?'Very High':'Extreme');
-  const vis=c.visibility!=null?c.visibility/1000:null;
+  const vis=c.visibility;   // km (normalized at map time for both sources)
   app.innerHTML=`
     <div class="hero">
       <div class="city">${f.place}</div>
@@ -330,20 +659,24 @@ function render(f){
       ${f.normal?`<div style="font-size:13px;color:var(--ink-faint);margin-top:2px">Normal ${rnd(f.normal.hi)}&deg; / ${rnd(f.normal.lo)}&deg;</div>`:''}
     </div>
     ${f.narrative?`<div class="card"><div class="cap">Forecast</div><div class="narr">${f.narrative}</div></div>`:''}
-    <div class="card"><div class="cap">Forecast</div><div class="hourly">${hours}</div></div>
+    ${f.hourly.length?`<div class="card"><div class="cap">Hourly Forecast</div><div class="hourly">${strip}</div></div>`:''}
     ${dailyCard}
     <div class="tiles">
       <div class="tile"><div class="cap">Feels Like</div><div class="big">${rnd(c.feelsLike)}&deg;</div><div class="note">Actual ${rnd(c.temp)}&deg;</div></div>
       <div class="tile"><div class="cap">Precip Today</div><div class="big">${d0.precip==null?'&#8212;':(+d0.precip).toFixed(1)} mm</div><div class="note">${d0.pop!=null?d0.pop+'% chance':''}</div></div>
       <div class="tile"><div class="cap">Wind</div><div class="big">${rnd(c.windSpeed)} <span style="font-size:15px">km/h</span></div><div class="note">${windDir(c.windDir)} &middot; gusts ${rnd(c.gust)}</div></div>
       <div class="tile"><div class="cap">Humidity</div><div class="big">${rnd(c.humidity)}%</div><div class="note">Cloud ${rnd(c.cloud)}%</div></div>
-      <div class="tile"><div class="cap">UV Index</div><div class="big">${uv==null?'&#8212;':Math.round(uv)}</div><div class="note">${uvNote}</div></div>
+      ${(uv==null && c.dewPoint!=null)
+        ? `<div class="tile"><div class="cap">Dew Point</div><div class="big">${rnd(c.dewPoint)}&deg;</div><div class="note">Humidity ${rnd(c.humidity)}%</div></div>`
+        : `<div class="tile"><div class="cap">UV Index</div><div class="big">${uv==null?'&#8212;':Math.round(uv)}</div><div class="note">${uvNote}</div></div>`}
       <div class="tile"><div class="cap">Visibility</div><div class="big">${vis==null?'&#8212;':vis.toFixed(0)} <span style="font-size:15px">km</span></div><div class="note"></div></div>
       <div class="tile"><div class="cap">Sunrise</div><div class="big">${d0.sunrise?timeHM(d0.sunrise):'&#8212;'}</div><div class="note">${d0.sunset?'Sunset '+timeHM(d0.sunset):''}</div></div>
       <div class="tile"><div class="cap">Pressure</div><div class="big">${rnd(c.pressure)}</div><div class="note">hPa</div></div>
     </div>`;
-  $('#foot').innerHTML='Source: '+f.source;
-  enhanceHourly();
+  $('#foot').innerHTML='Source: '+f.source+(c.time?' &middot; observed '+timeHM(c.time):'');
+  CURRENT_F=f;
+  enhanceScroll();
+  wireDays();
 }
 
 function setupCard(){
@@ -354,8 +687,9 @@ function setupCard(){
   $('#foot').innerHTML='';
 }
 
-async function load(lat,lon,name){
+async function load(lat,lon,name,remember){
   lastCoords={lat,lon,name};
+  if(remember!==false) savePrefs({ lat, lon, name: name||null });
   app.innerHTML='<div class="msg"><div class="spinner"></div>Loading forecast&#8230;</div>';
   try{
     if(!name) name=await reverseName(lat,lon);
@@ -366,16 +700,68 @@ async function load(lat,lon,name){
   }catch(e){ app.innerHTML=`<div class="msg">Couldn't load the forecast.<br><small style="color:var(--ink-faint)">${e.message}</small></div>`; }
 }
 
-$('#src-gem').addEventListener('click',()=>{ CONFIG.source='gem'; $('#src-gem').classList.add('on'); $('#src-twn').classList.remove('on'); load(lastCoords.lat,lastCoords.lon,lastCoords.name); });
-$('#src-twn').addEventListener('click',()=>{ CONFIG.source='twn'; $('#src-twn').classList.add('on'); $('#src-gem').classList.remove('on'); load(lastCoords.lat,lastCoords.lon,lastCoords.name); });
+function setSource(src){
+  CONFIG.source=src; savePrefs({ source:src });
+  $('#src-twn').classList.toggle('on',src==='twn');
+  $('#src-gem').classList.toggle('on',src==='gem');
+  load(lastCoords.lat,lastCoords.lon,lastCoords.name);
+}
+$('#src-gem').addEventListener('click',()=>setSource('gem'));
+$('#src-twn').addEventListener('click',()=>setSource('twn'));
 
-function enhanceHourly(){
-  const el=document.querySelector('.hourly'); if(!el) return;
-  el.addEventListener('wheel',e=>{ if(e.deltaY!==0){ el.scrollLeft+=e.deltaY; e.preventDefault(); } },{passive:false});
-  let down=false,sx=0,sl=0;
-  el.addEventListener('pointerdown',e=>{ if(e.pointerType!=='mouse')return; down=true; sx=e.clientX; sl=el.scrollLeft; el.classList.add('drag'); });
-  window.addEventListener('pointermove',e=>{ if(!down)return; el.scrollLeft=sl-(e.clientX-sx); });
-  window.addEventListener('pointerup',()=>{ down=false; el.classList.remove('drag'); });
+function enhanceScroll(){
+  document.querySelectorAll('.cscroll, .hourly').forEach(el=>{
+    el.addEventListener('wheel',e=>{ if(e.deltaY!==0){ el.scrollLeft+=e.deltaY; e.preventDefault(); } },{passive:false});
+    let down=false,sx=0,sl=0;
+    el.addEventListener('pointerdown',e=>{ if(e.pointerType!=='mouse')return; down=true; sx=e.clientX; sl=el.scrollLeft; el.classList.add('drag'); });
+    window.addEventListener('pointermove',e=>{ if(!down)return; el.scrollLeft=sl-(e.clientX-sx); });
+    window.addEventListener('pointerup',()=>{ down=false; el.classList.remove('drag'); });
+  });
+}
+
+/* hours belonging to one calendar date -> charts (empty if outside forecast range) */
+function hoursFor(date){
+  if(!date || !CURRENT_F) return '';
+  const onDate=arr=>(arr||[]).filter(h=>String(h.time||'').slice(0,10)===date);
+  const hourOfStr=t=>+String(t).slice(11,13);
+  const today=new Date(); const todayStr=today.getFullYear()+'-'+
+    String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+
+  const H=onDate(CURRENT_F.hourly);
+  const P=onDate(CURRENT_F.periods);
+  // Hourly is preferred, but only if it actually covers the day. The 72h window ends
+  // mid-day on the 4th day, so that day's hourly is truncated (misses the afternoon peak)
+  // — fall back to the 6-hour periods, which span the whole day.
+  const covers = H.length>=2 && (date===todayStr || hourOfStr(H[H.length-1].time)>=20);
+  if(covers) return buildCharts(H,'Hourly');
+  if(P.length>=2) return buildCharts(P,'6-Hour Periods');
+  if(H.length>=2) return buildCharts(H,'Hourly (partial)');
+  return '<div class="nohr">No sub-daily detail available for this day.</div>';
+}
+
+/* click a day -> Apple-style expanded detail */
+function wireDays(){
+  document.querySelectorAll('.day').forEach(row=>{
+    row.addEventListener('click',()=>{
+      const i=+row.dataset.i, box=document.getElementById('dx'+i);
+      if(!box) return;
+      const open = box.style.display!=='none';
+      document.querySelectorAll('.dayx').forEach(b=>b.style.display='none');
+      if(open) return;
+      const d=CURRENT_F?.daily?.[i]; if(!d) return;
+      const r=(k,v)=> v==null||v===''?'':`<div class="r"><span>${k}</span><span>${v}</span></div>`;
+      box.innerHTML=`<div class="cond">${d.label||''}</div><div class="grid">
+        ${r('Chance of rain',d.pop!=null?d.pop+'%':null)}
+        ${r('Precipitation',d.precip!=null?(+d.precip).toFixed(1)+' mm':null)}
+        ${r('Wind',d.windMax!=null?rnd(d.windMax)+' km/h':null)}
+        ${r('UV index',d.uv!=null?Math.round(d.uv):null)}
+        ${r('Sunrise',d.sunrise?timeHM(d.sunrise):(sunFor(d.date).sunrise?timeHM(sunFor(d.date).sunrise):null))}
+        ${r('Sunset',d.sunset?timeHM(d.sunset):(sunFor(d.date).sunset?timeHM(sunFor(d.date).sunset):null))}
+      </div>${hoursFor(d.date)}`;
+      box.style.display='block';
+      enhanceScroll();
+    });
+  });
 }
 
 let tmr;
@@ -396,14 +782,45 @@ $('#results').addEventListener('click',e=>{ const b=e.target.closest('button'); 
   $('#results').style.display='none'; $('#q').value=b.dataset.name; load(+b.dataset.lat,+b.dataset.lon,b.dataset.name); });
 document.addEventListener('click',e=>{ if(!e.target.closest('.searchbar')) $('#results').style.display='none'; });
 
+/* The button asks the browser for precise GPS (prompts). Falls back to IP if denied. */
 $('#geo').addEventListener('click',useGeo);
 function useGeo(){
-  if(!navigator.geolocation){ load(49.28,-122.79,'Coquitlam'); return; }
+  if(!navigator.geolocation){ return autoLocate(); }
   app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
   navigator.geolocation.getCurrentPosition(
     p=>load(p.coords.latitude,p.coords.longitude,null),
-    ()=>load(49.28,-122.79,'Coquitlam'),
-    {timeout:8000,maximumAge:600000});
+    ()=>autoLocate(),                                   // denied/failed -> IP, never a hardcoded guess
+    {timeout:8000,maximumAge:600000,enableHighAccuracy:true});
 }
-useGeo();
+
+/* Startup location: IP first — no permission prompt, same approach TWN uses. */
+async function autoLocate(){
+  app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
+  const ip=await ipLocate();
+  if(ip){ load(ip.lat, ip.lon, ip.name||null); return; }
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(
+      p=>load(p.coords.latitude,p.coords.longitude,null),
+      ()=>{ app.innerHTML='<div class="msg">Couldn\'t determine your location.<br>Search for a city above.</div>'; },
+      {timeout:8000,maximumAge:600000});
+  } else {
+    app.innerHTML='<div class="msg">Couldn\'t determine your location.<br>Search for a city above.</div>';
+  }
+}
+
+/* ---- startup: restore saved source + city, else ask for location ---- */
+(function start(){
+  const pr=loadPrefs();
+  if(pr.source==='gem'||pr.source==='twn'){
+    CONFIG.source=pr.source;
+    $('#src-twn').classList.toggle('on',pr.source==='twn');
+    $('#src-gem').classList.toggle('on',pr.source==='gem');
+  }
+  if(typeof pr.lat==='number' && typeof pr.lon==='number'){
+    if(pr.name) $('#q').value=pr.name;
+    load(pr.lat,pr.lon,pr.name||null);
+  } else {
+    autoLocate();
+  }
+})();
 </script>
