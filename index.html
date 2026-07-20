@@ -42,17 +42,25 @@
     background:linear-gradient(180deg,var(--g-top) 0%,var(--g-bot) 100%) no-repeat fixed;
     background-color:var(--g-bot);
     transition:background-color 1.2s ease;
-    overscroll-behavior:none;                 /* stop the rubber-band entirely where supported */
+    /* rubber-band scrolling stays ON — the gradient + background-color live here,
+       so the springy overscroll area shows sky, never white. */
   }
   body {
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
     color:var(--ink);
     background:transparent;
-    min-height:100%; overscroll-behavior:none;
+    min-height:100%; overscroll-behavior-y:contain;   /* keep the spring, block browser pull-to-refresh */
     -webkit-font-smoothing:antialiased;
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
   #bg { position:fixed; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; display:block; }
+  .ptr { position:fixed; top:0; left:0; right:0; z-index:5; display:flex; justify-content:center;
+    pointer-events:none; opacity:0; transform:translateY(-42px); }
+  .ptr .ring { width:28px; height:28px; margin-top:12px; border-radius:50%;
+    border:2.5px solid rgba(255,255,255,.32); border-top-color:#fff;
+    background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  .ptr.spin .ring { animation:spin .8s linear infinite; }
+
   .wrap { max-width:480px; margin:0 auto; padding:14px 16px 40px; position:relative; z-index:1; }
 
   .srcbar { display:flex; gap:6px; margin:22px 0 0; }
@@ -65,7 +73,8 @@
   .iconbtn { width:38px; height:38px; border-radius:50%; cursor:pointer;
     background:var(--card); border:1px solid var(--card-line); color:var(--ink);
     backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
-    font-size:17px; line-height:1; display:flex; align-items:center; justify-content:center; padding:0; }
+    line-height:0; display:flex; align-items:center; justify-content:center; padding:0; }
+  .iconbtn svg { width:23px; height:23px; }
   .iconbtn:hover { background:rgba(255,255,255,.24); }
   .topbar .searchbar { display:none; }
   .topbar.open .searchbar { display:block; }
@@ -77,7 +86,10 @@
     padding:11px 40px 11px 38px; border-radius:12px; border:1px solid var(--card-line); }
   .searchbar input::placeholder { color:var(--ink-faint); }
   .searchbar .mag { position:absolute; left:13px; top:50%; transform:translateY(-50%); opacity:.55; font-size:15px; }
-  .searchbar .loc { position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--ink); opacity:.8; font-size:17px; cursor:pointer; padding:6px; }
+  .searchbar .loc { position:absolute; right:7px; top:50%; transform:translateY(-50%); background:none; border:none;
+    color:var(--ink); opacity:.7; cursor:pointer; padding:6px; line-height:0; }
+  .searchbar .loc:hover { opacity:1; }
+  .searchbar .loc svg { width:17px; height:17px; }
   .results { position:absolute; z-index:20; left:0; right:0; top:48px; background:rgba(30,40,55,.86); backdrop-filter:var(--blur); border-radius:12px; overflow:hidden; border:1px solid var(--card-line); }
   .results button { display:block; width:100%; text-align:left; background:none; border:none; color:var(--ink); padding:11px 14px; font-size:15px; cursor:pointer; }
   .results button:hover { background:rgba(255,255,255,.1); }
@@ -175,16 +187,28 @@
 </style>
 
 <canvas id="bg" aria-hidden="true"></canvas>
+<div class="ptr" id="ptr" aria-hidden="true"><div class="ring"></div></div>
 <div class="wrap">
   <div class="topbar" id="topbar">
     <div class="iconrowbtns">
-      <button class="iconbtn" id="btn-search" title="Search" aria-label="Search">&#8981;</button>
-      <button class="iconbtn" id="geo2" title="Use my location" aria-label="Use my location">&#9678;</button>
+      <button class="iconbtn" id="btn-search" title="Search" aria-label="Search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round">
+          <circle cx="10.5" cy="10.5" r="6.6"/><line x1="15.4" y1="15.4" x2="20.5" y2="20.5"/></svg>
+      </button>
+      <button class="iconbtn" id="geo" title="Use my location" aria-label="Use my location">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="6.4"/><circle cx="12" cy="12" r="1.9" fill="currentColor" stroke="none"/>
+          <line x1="12" y1="1.6" x2="12" y2="4.4"/><line x1="12" y1="19.6" x2="12" y2="22.4"/>
+          <line x1="1.6" y1="12" x2="4.4" y2="12"/><line x1="19.6" y1="12" x2="22.4" y2="12"/></svg>
+      </button>
     </div>
     <div class="searchbar">
       <span class="mag">&#8981;</span>
       <input id="q" type="text" placeholder="Search city or town" autocomplete="off" spellcheck="false">
-      <button class="loc" id="geo" title="Use my location">&#9678;</button>
+      <button class="loc" id="clear" title="Clear search" aria-label="Clear search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <line x1="6.5" y1="6.5" x2="17.5" y2="17.5"/><line x1="17.5" y1="6.5" x2="6.5" y2="17.5"/></svg>
+      </button>
       <div class="results" id="results" style="display:none"></div>
     </div>
   </div>
@@ -962,6 +986,7 @@ function setupCard(){
   $('#foot').innerHTML='';
 }
 
+let lastLoadTs=0;
 async function load(lat,lon,name,remember){
   lastCoords={lat,lon,name};
   if(remember!==false) savePrefs({ lat, lon, name: name||null });
@@ -973,6 +998,7 @@ async function load(lat,lon,name,remember){
     else if(CONFIG.source==='comb'){ f=await fetchCombined(lat,lon,name); if(!f){ setupCard(); return; } }
     else { f=await fetchGEM(lat,lon,name); }
     CURRENT_RAW=f;
+    lastLoadTs=Date.now();
     render(f);
   }catch(e){ app.innerHTML=`<div class="msg">Couldn't load the forecast.<br><small style="color:var(--ink-faint)">${e.message}</small></div>`; }
 }
@@ -1095,8 +1121,10 @@ function closeSearch(){
   $('#results').style.display='none';
 }
 $('#btn-search').addEventListener('click',openSearch);
-$('#geo2').addEventListener('click',useGeo);
 $('#geo').addEventListener('click',useGeo);
+$('#clear').addEventListener('click',()=>{
+  const q=$('#q'); q.value=''; $('#results').style.display='none'; q.focus();
+});
 function useGeo(){
   closeSearch();
   if(!navigator.geolocation){ return autoLocate(); }
@@ -1121,6 +1149,63 @@ async function autoLocate(){
     app.innerHTML='<div class="msg">Couldn\'t determine your location.<br>Search for a city above.</div>';
   }
 }
+
+/* ============ refresh: on reopen, on a timer, and by pull-down ============ */
+const STALE_MS = 10*60*1000;                 // data older than this is refetched on reopen
+let refreshing=false;
+
+async function refresh(force){
+  if(refreshing) return;
+  if(lastCoords.lat==null) return;                       // nothing loaded yet
+  if(!force && Date.now()-lastLoadTs < STALE_MS) return; // still fresh
+  refreshing=true;
+  const ptr=$('#ptr'); ptr.classList.add('spin'); ptr.style.opacity='1'; ptr.style.transform='translateY(0)';
+  try{ await load(lastCoords.lat,lastCoords.lon,lastCoords.name,false); }
+  finally{
+    refreshing=false;
+    ptr.classList.remove('spin'); ptr.style.opacity='0'; ptr.style.transform='translateY(-42px)';
+  }
+}
+
+// reopened from the background / another tab / bfcache
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refresh(false); });
+addEventListener('pageshow',e=>{ if(e.persisted) refresh(false); });
+addEventListener('focus',()=>refresh(false));
+// and while it sits open
+setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
+
+/* ---- pull-to-refresh (touch). Listeners are passive so the native
+   rubber-band springiness is preserved. ---- */
+(function pullToRefresh(){
+  const ptr=$('#ptr'); const TH=72; let y0=null, dist=0, active=false;
+  const atTop=()=>(window.scrollY||document.documentElement.scrollTop||0)<=0;
+  addEventListener('touchstart',e=>{
+    if(e.touches.length!==1 || !atTop() || refreshing){ y0=null; return; }
+    y0=e.touches[0].clientY; dist=0; active=false;
+  },{passive:true});
+  addEventListener('touchmove',e=>{
+    if(y0==null || refreshing) return;
+    const d=e.touches[0].clientY-y0;
+    if(d>6 && atTop()){
+      active=true;
+      dist=Math.min(130,d);
+      const p=Math.min(1,dist/TH);
+      ptr.style.opacity=p.toFixed(2);
+      ptr.style.transform=`translateY(${(dist*0.42-42).toFixed(1)}px)`;
+      ptr.querySelector('.ring').style.transform=`rotate(${(dist*3).toFixed(0)}deg)`;
+    }
+  },{passive:true});
+  function end(){
+    if(y0==null) return;
+    const go = active && dist>=TH;
+    y0=null; active=false;
+    if(go){ refresh(true); }
+    else { ptr.style.opacity='0'; ptr.style.transform='translateY(-42px)'; }
+    dist=0;
+  }
+  addEventListener('touchend',end,{passive:true});
+  addEventListener('touchcancel',end,{passive:true});
+})();
 
 /* ---- startup: restore saved source + city, else ask for location ---- */
 (function start(){
