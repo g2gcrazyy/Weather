@@ -56,7 +56,7 @@
 
   .srcbar { display:flex; gap:6px; margin-bottom:8px; }
   .srcbar button { flex:1; background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
-    border:1px solid var(--card-line); color:var(--ink-dim); font-size:13px; font-weight:600; padding:8px; border-radius:10px; cursor:pointer; }
+    border:1px solid var(--card-line); color:var(--ink-dim); font-size:12px; font-weight:600; padding:8px 4px; border-radius:10px; cursor:pointer; white-space:nowrap; }
   .srcbar button.on { color:var(--ink); background:rgba(255,255,255,.24); }
 
   .searchbar { position:relative; margin-bottom:10px; }
@@ -155,8 +155,9 @@
 
 <div class="wrap">
   <div class="srcbar">
-    <button id="src-gem">GEM (Env. Canada)</button>
+    <button id="src-gem">Env. Canada</button>
     <button id="src-twn" class="on">Weather Network</button>
+    <button id="src-comb">Combined</button>
   </div>
   <div class="searchbar">
     <span class="mag">&#8981;</span>
@@ -464,6 +465,34 @@ function mapTWN({ st, hr, ob, lt, av, hp }, name){
   };
 }
 
+/* COMBINED: The Weather Network for conditions/temps, Environment Canada (GEM) for all
+   precipitation data — chance of precipitation and precipitation amounts. */
+async function fetchCombined(lat,lon,name){
+  const [twn,gem] = await Promise.all([
+    fetchTWN(lat,lon,name),
+    fetchGEM(lat,lon,name).catch(()=>null),
+  ]);
+  if(!twn) return gem;
+  if(!gem) return twn;
+
+  const hKey = t => String(t||'').slice(0,13);                 // YYYY-MM-DDTHH
+  const gemPop = new Map(gem.hourly.map(h=>[hKey(h.time), h.pop]));
+  const gemDay = new Map(gem.daily.map(d=>[d.date, d]));
+  const takePop = e => { const v=gemPop.get(hKey(e.time)); return v==null ? e : {...e, pop:v}; };
+
+  const out = {...twn};
+  out.hourly  = twn.hourly.map(takePop);
+  out.periods = (twn.periods||[]).map(takePop);
+  out.daily   = twn.daily.map(d=>{
+    const g=gemDay.get(d.date); if(!g) return d;
+    return {...d, pop: g.pop!=null?g.pop:d.pop, precip: g.precip!=null?g.precip:d.precip };
+  });
+  const nowPop = gemPop.get(hKey(twn.current.time)) ?? gem.current.pop;
+  out.current = {...twn.current, ...(nowPop!=null?{pop:nowPop}:{})};
+  out.source  = 'The Weather Network + Environment Canada precipitation';
+  return out;
+}
+
 /* Reverse geocode -> a CITY name. BigDataCloud's `city`/`locality` can return a regional
    district ("Metro Vancouver"), so prefer the finer administrative levels first. */
 const BAD_PLACE=/regional district|metro |metropolitan|census|division|unorganized/i;
@@ -633,8 +662,14 @@ function render(f){
     dailyCard=`<div class="card"><div class="cap">${f.dailyLabel}</div>${rows}</div>`;
   }
 
-  const H24=f.hourly.slice(0,24);
-  const items=H24.map((h,i)=>({ t:new Date(h.time).getTime(), kind:'hour', h, i }));
+  // "Now" = the live observation, not the next forecast hour. The feeds start at the next
+  // hour boundary, so filter those to strictly-future and prepend a real current cell.
+  const nowTs=Date.now();
+  const future=f.hourly.filter(h=>{ const t=new Date(h.time).getTime(); return isFinite(t) && t>nowTs; });
+  const nowCell={ time:(c.time||new Date().toISOString()), temp:c.temp, sky:c.sky, isDay:c.isDay,
+                  label:c.label, pop:(future[0]?future[0].pop:null) };
+  const H24=[nowCell, ...future].slice(0,24);
+  const items=H24.map((h,i)=>({ t:(i===0?nowTs:new Date(h.time).getTime()), kind:'hour', h, i }));
   if(H24.length){
     const t0=items[0].t, tN=items[items.length-1].t;
     const dates=[...new Set(H24.map(h=>String(h.time).slice(0,10)))];
@@ -705,19 +740,24 @@ async function load(lat,lon,name,remember){
     if(!name) name=await reverseName(lat,lon);
     let f;
     if(CONFIG.source==='twn'){ f=await fetchTWN(lat,lon,name); if(!f){ setupCard(); return; } }
+    else if(CONFIG.source==='comb'){ f=await fetchCombined(lat,lon,name); if(!f){ setupCard(); return; } }
     else { f=await fetchGEM(lat,lon,name); }
     render(f);
   }catch(e){ app.innerHTML=`<div class="msg">Couldn't load the forecast.<br><small style="color:var(--ink-faint)">${e.message}</small></div>`; }
 }
 
-function setSource(src){
-  CONFIG.source=src; savePrefs({ source:src });
+function markSource(src){
   $('#src-twn').classList.toggle('on',src==='twn');
   $('#src-gem').classList.toggle('on',src==='gem');
+  $('#src-comb').classList.toggle('on',src==='comb');
+}
+function setSource(src){
+  CONFIG.source=src; savePrefs({ source:src }); markSource(src);
   load(lastCoords.lat,lastCoords.lon,lastCoords.name);
 }
 $('#src-gem').addEventListener('click',()=>setSource('gem'));
 $('#src-twn').addEventListener('click',()=>setSource('twn'));
+$('#src-comb').addEventListener('click',()=>setSource('comb'));
 
 function enhanceScroll(){
   document.querySelectorAll('.cscroll, .hourly').forEach(el=>{
@@ -821,10 +861,8 @@ async function autoLocate(){
 /* ---- startup: restore saved source + city, else ask for location ---- */
 (function start(){
   const pr=loadPrefs();
-  if(pr.source==='gem'||pr.source==='twn'){
-    CONFIG.source=pr.source;
-    $('#src-twn').classList.toggle('on',pr.source==='twn');
-    $('#src-gem').classList.toggle('on',pr.source==='gem');
+  if(pr.source==='gem'||pr.source==='twn'||pr.source==='comb'){
+    CONFIG.source=pr.source; markSource(pr.source);
   }
   if(typeof pr.lat==='number' && typeof pr.lon==='number'){
     if(pr.name) $('#q').value=pr.name;
