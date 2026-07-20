@@ -267,8 +267,8 @@
   <div id="app"><div class="msg"><div class="spinner"></div>Getting your weather&#8230;</div></div>
   <div class="srcbar">
     <button id="src-gem">Env. Canada</button>
-    <button id="src-twn">Weather Network</button>
-    <button id="src-comb" class="on">Combined</button>
+    <button id="src-twn" class="on">Weather Network</button>
+    <button id="src-comb">Combined</button>
   </div>
   <div class="unitbar">
     <button id="u-c" class="on">&deg;C</button><button id="u-f">&deg;F</button>
@@ -294,7 +294,7 @@
 <script>
 /* ============================ CONFIG ============================ */
 const CONFIG = {
-  source: 'comb',           // default: Combined (TWN + ECCC precip); saved choice overrides
+  source: 'twn',            // default: The Weather Network; a saved choice overrides this
   twn: {                    // Pelmorex API — public, wildcard CORS, no proxy, no login.
     base: 'https://weatherapi.pelmorex.com/api/v1',
     shortterm: '/shortterm',                    // 6-hourly (fallback for the strip / current)
