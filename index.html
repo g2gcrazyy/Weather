@@ -52,7 +52,8 @@
     -webkit-font-smoothing:antialiased;
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
-  .wrap { max-width:480px; margin:0 auto; padding:14px 16px 40px; }
+  #bg { position:fixed; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; display:block; }
+  .wrap { max-width:480px; margin:0 auto; padding:14px 16px 40px; position:relative; z-index:1; }
 
   .srcbar { display:flex; gap:6px; margin-bottom:8px; }
   .srcbar button { flex:1; background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
@@ -160,6 +161,7 @@
   @media (prefers-reduced-motion:reduce){ .spinner{ animation:none; } body{ transition:none; } }
 </style>
 
+<canvas id="bg" aria-hidden="true"></canvas>
 <div class="wrap">
   <div class="srcbar">
     <button id="src-gem">Env. Canada</button>
@@ -310,6 +312,167 @@ const GRAD = {
   day:{ clear:['#3b7dd8','#8fc3f0'], cloud:['#5b6b7d','#96a3b3'], rain:['#3f5566','#6d7f8e'], snow:['#63768a','#aab8c6'], storm:['#2b3440','#5a5f6b'], fog:['#5b6b7d','#96a3b3'] },
   night:{ clear:['#0e1a33','#2a3a5c'], cloud:['#232c38','#3d4756'], rain:['#1c2733','#374350'], snow:['#28313f','#454f5e'], storm:['#12161d','#2c3038'], fog:['#232c38','#3d4756'] },
 };
+/* =====================================================================
+   Animated condition background (procedural canvas — stars, clouds,
+   sun/moon, rain, snow, fog, lightning). Stylised, not photoreal.
+===================================================================== */
+const BG=(()=>{
+  const cv=document.getElementById('bg');
+  if(!cv) return { set(){} };
+  const ctx=cv.getContext('2d');
+  const reduce=window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let W=0,H=0,DPR=1, raf=null, t0=performance.now();
+  let scene={sky:'cloud',isDay:true,cover:50};
+  let stars=[],clouds=[],drops=[],flakes=[],fog=[],flash={t:-1e9,next:4000};
+  const rnd=(a,b)=>a+Math.random()*(b-a);
+
+  function size(){
+    DPR=Math.min(2,window.devicePixelRatio||1);
+    W=cv.clientWidth; H=cv.clientHeight;
+    cv.width=Math.floor(W*DPR); cv.height=Math.floor(H*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    build();
+  }
+
+  function build(){
+    const {sky,isDay,cover}=scene;
+    // stars only at night, fewer when cloudy
+    const starN = !isDay ? Math.round((sky==='clear'?150:sky==='cloud'?70:20)) : 0;
+    stars=Array.from({length:starN},()=>({x:rnd(0,W),y:rnd(0,H*0.72),r:rnd(0.4,1.5),
+      p:rnd(0,Math.PI*2), sp:rnd(0.6,2.2), b:rnd(0.35,1)}));
+    // clouds scale with condition + reported cover
+    const base={clear:0,cloud:3,rain:6,snow:5,storm:7,fog:3}[sky] ?? 3;
+    const n=Math.max(0, Math.round(base*(sky==='clear'?1:(0.55+ (cover??50)/100*0.9))));
+    clouds=Array.from({length:n},(_,i)=>({
+      x:rnd(-0.2,1.2)*W, y:rnd(0.04,0.5)*H, s:rnd(0.55,1.35),
+      v:rnd(4,13)*(sky==='storm'?1.7:1)/60, o:rnd(0.35,0.8),
+      puffs:Array.from({length:5+Math.floor(Math.random()*3)},()=>({
+        dx:rnd(-70,70), dy:rnd(-16,16), r:rnd(26,54)}))
+    }));
+    const rainN = sky==='rain'?170 : sky==='storm'?260 : 0;
+    drops=Array.from({length:rainN},()=>({x:rnd(0,W),y:rnd(0,H),l:rnd(9,20),v:rnd(430,760)/60,o:rnd(.25,.6)}));
+    const snowN = sky==='snow'?150:0;
+    flakes=Array.from({length:snowN},()=>({x:rnd(0,W),y:rnd(0,H),r:rnd(1,2.9),
+      v:rnd(28,70)/60, a:rnd(0,Math.PI*2), sw:rnd(.4,1.5)}));
+    fog = sky==='fog' ? Array.from({length:5},(_,i)=>({y:H*(0.35+i*0.13), o:rnd(.10,.20),
+      v:rnd(5,14)/60, x:rnd(-W,0), w:rnd(1.3,2.2)})) : [];
+  }
+
+  function sun(x,y,day){
+    const R=day?54:40;
+    const glow=ctx.createRadialGradient(x,y,0,x,y,R*5.5);
+    if(day){ glow.addColorStop(0,'rgba(255,236,170,.55)'); glow.addColorStop(.35,'rgba(255,206,110,.16)');
+             glow.addColorStop(1,'rgba(255,200,90,0)'); }
+    else   { glow.addColorStop(0,'rgba(226,236,255,.30)'); glow.addColorStop(1,'rgba(200,220,255,0)'); }
+    ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(x,y,R*5.5,0,7); ctx.fill();
+    const core=ctx.createRadialGradient(x-R*.25,y-R*.25,R*.1,x,y,R);
+    if(day){ core.addColorStop(0,'#fffdf2'); core.addColorStop(.55,'#ffe9a3'); core.addColorStop(1,'rgba(255,205,95,.85)'); }
+    else   { core.addColorStop(0,'#ffffff'); core.addColorStop(1,'rgba(214,228,255,.9)'); }
+    ctx.fillStyle=core; ctx.beginPath(); ctx.arc(x,y,R,0,7); ctx.fill();
+    if(!day){ // carve a crescent
+      ctx.save(); ctx.globalCompositeOperation='destination-out';
+      ctx.beginPath(); ctx.arc(x+R*.42,y-R*.30,R*.92,0,7); ctx.fill(); ctx.restore();
+    }
+  }
+  function lensFlare(x,y){
+    const cx=W/2, cy=H*0.52, dx=cx-x, dy=cy-y;
+    const spots=[[0.45,26,'rgba(255,225,160,.10)'],[0.78,15,'rgba(180,255,220,.09)'],
+                 [1.15,34,'rgba(255,190,150,.08)'],[1.5,10,'rgba(200,215,255,.10)']];
+    for(const [k,r,col] of spots){
+      ctx.fillStyle=col; ctx.beginPath(); ctx.arc(x+dx*k,y+dy*k,r,0,7); ctx.fill();
+    }
+  }
+  function cloud(c,day,sky){
+    const dark = sky==='storm'?1 : sky==='rain'?.72 : sky==='snow'?.5 : 0;
+    for(const p of c.puffs){
+      const R=p.r*c.s, X=c.x+p.dx*c.s, Y=c.y+p.dy*c.s;
+      const g=ctx.createRadialGradient(X,Y-R*.25,R*.15,X,Y,R);
+      const hi = day ? [255,255,255] : [188,200,220];
+      const lo = day ? [214,226,244] : [120,132,155];
+      const mix=(a,b,k)=>a.map((v,i)=>Math.round(v+(b[i]-v)*k));
+      const top=mix(hi,[120,128,145],dark*.55), bot=mix(lo,[70,78,95],dark*.6);
+      g.addColorStop(0,`rgba(${top.join(',')},${c.o})`);
+      g.addColorStop(1,`rgba(${bot.join(',')},0)`);
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(X,Y,R,0,7); ctx.fill();
+    }
+  }
+
+  function draw(now){
+    const dt=Math.min(50,now-t0); t0=now;
+    const k=dt/16.67;                                   // frame-rate normaliser
+    const {sky,isDay}=scene;
+    ctx.clearRect(0,0,W,H);
+
+    if(!isDay && stars.length){
+      for(const s of stars){
+        s.p+=0.02*s.sp*k;
+        const a=s.b*(0.55+0.45*Math.sin(s.p));
+        ctx.fillStyle=`rgba(255,255,255,${a.toFixed(3)})`;
+        ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,7); ctx.fill();
+      }
+    }
+    if(sky==='clear'||sky==='cloud'){
+      const x=W*0.74, y=H*0.16;
+      sun(x,y,isDay);
+      if(isDay && sky==='clear') lensFlare(x,y);
+    }
+    for(const c of clouds){
+      cloud(c,isDay,sky);
+      c.x+=c.v*k; if(c.x-160*c.s>W) c.x=-160*c.s;
+    }
+    if(fog.length){
+      for(const f of fog){
+        const g=ctx.createLinearGradient(0,f.y-40,0,f.y+40);
+        g.addColorStop(0,'rgba(226,234,244,0)');
+        g.addColorStop(.5,`rgba(226,234,244,${f.o})`);
+        g.addColorStop(1,'rgba(226,234,244,0)');
+        ctx.fillStyle=g; ctx.fillRect(0,f.y-40,W,80);
+        f.x+=f.v*k; if(f.x>W) f.x=-W;
+      }
+    }
+    if(drops.length){
+      ctx.lineCap='round';
+      for(const d of drops){
+        ctx.strokeStyle=`rgba(200,225,255,${d.o})`; ctx.lineWidth=1.1;
+        ctx.beginPath(); ctx.moveTo(d.x,d.y); ctx.lineTo(d.x-2.5,d.y+d.l); ctx.stroke();
+        d.y+=d.v*k*1.6; d.x-=0.25*k;
+        if(d.y>H){ d.y=-20; d.x=rnd(0,W); }
+      }
+    }
+    if(flakes.length){
+      for(const f of flakes){
+        f.a+=0.03*k; f.y+=f.v*k; f.x+=Math.sin(f.a)*f.sw*k*0.6;
+        if(f.y>H){ f.y=-8; f.x=rnd(0,W); }
+        ctx.fillStyle='rgba(255,255,255,.85)';
+        ctx.beginPath(); ctx.arc(f.x,f.y,f.r,0,7); ctx.fill();
+      }
+    }
+    if(sky==='storm'){
+      if(now-flash.t>flash.next){ flash.t=now; flash.next=rnd(3500,9000); }
+      const age=now-flash.t;
+      if(age<260){
+        const a=(age<70?age/70:1-(age-70)/190)*0.35;
+        if(a>0){ ctx.fillStyle=`rgba(255,255,255,${a.toFixed(3)})`; ctx.fillRect(0,0,W,H); }
+      }
+    }
+    raf=requestAnimationFrame(draw);
+  }
+
+  function start(){ if(raf) return; t0=performance.now(); raf=requestAnimationFrame(draw); }
+  function stop(){ if(raf){ cancelAnimationFrame(raf); raf=null; } }
+
+  addEventListener('resize',()=>{ size(); },{passive:true});
+  document.addEventListener('visibilitychange',()=>{ document.hidden?stop():(reduce?draw(performance.now()):start()); });
+  size();
+  if(reduce) draw(performance.now()); else start();     // static single frame if motion is reduced
+
+  return { set(sky,isDay,cover){
+    scene={sky:sky||'cloud', isDay:!!isDay, cover:(cover==null?50:cover)};
+    size();
+    if(reduce){ stop(); draw(performance.now()); }
+  }};
+})();
+
 function paint(sky,isDay){ const g=GRAD[isDay?'day':'night'][sky]||GRAD.day.cloud;
   const r=document.documentElement;
   r.style.setProperty('--g-top',g[0]); r.style.setProperty('--g-bot',g[1]);
@@ -681,7 +844,7 @@ function buildCharts(H,heading){
 
 function render(f){
   f=toDisplayUnits(f);
-  const c=f.current; paint(c.sky,c.isDay);
+  const c=f.current; paint(c.sky,c.isDay); BG.set(c.sky,c.isDay,c.cloud);
   const d0=f.daily[0]||{};
   /* ---- daily rows: lo and hi flanking the bar, click to expand ---- */
   let dailyCard='';
