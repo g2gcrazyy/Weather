@@ -39,11 +39,11 @@
   /* Gradient lives on <html> so iOS rubber-band overscroll reveals it, not white.
      background-color is the solid fallback the overscroll area is filled with. */
   html {
-    background:linear-gradient(180deg,var(--g-top) 0%,var(--g-bot) 100%) no-repeat fixed;
-    background-color:var(--g-bot);
+    /* The sky GRADIENT is drawn inside the fixed #bg canvas, so it can't slide
+       against the animation during rubber-band overscroll. This solid colour only
+       fills the overscroll gap outside the viewport. */
+    background-color:var(--g-top);
     transition:background-color 1.2s ease;
-    /* rubber-band scrolling stays ON — the gradient + background-color live here,
-       so the springy overscroll area shows sky, never white. */
   }
   body {
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
@@ -56,10 +56,16 @@
   #bg { position:fixed; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; display:block; }
   .ptr { position:fixed; top:0; left:0; right:0; z-index:5; display:flex; justify-content:center;
     pointer-events:none; opacity:0; transform:translateY(-42px); }
-  .ptr .ring { width:28px; height:28px; margin-top:12px; border-radius:50%;
-    border:2.5px solid rgba(255,255,255,.32); border-top-color:#fff;
-    background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
-  .ptr.spin .ring { animation:spin .8s linear infinite; }
+  .ptrwrap { margin-top:12px; width:38px; height:38px; border-radius:50%;
+    background:var(--card); border:1px solid var(--card-line);
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+    display:flex; align-items:center; justify-content:center; }
+  .ptrsvg { width:30px; height:30px; transform:rotate(-90deg); }
+  .ptrsvg .trk { fill:none; stroke:rgba(255,255,255,.22); stroke-width:3; }
+  .ptrsvg .arc { fill:none; stroke:#fff; stroke-width:3; stroke-linecap:round;
+    stroke-dasharray:87.96; stroke-dashoffset:87.96; }
+  .ptr.spin .ptrwrap { animation:spin .75s linear infinite; }
+  .ptr.spin .ptrsvg .arc { stroke-dashoffset:66; }
 
   .wrap { max-width:480px; margin:0 auto; padding:14px 16px 40px; position:relative; z-index:1; }
 
@@ -187,7 +193,14 @@
 </style>
 
 <canvas id="bg" aria-hidden="true"></canvas>
-<div class="ptr" id="ptr" aria-hidden="true"><div class="ring"></div></div>
+<div class="ptr" id="ptr" aria-hidden="true">
+  <div class="ptrwrap">
+    <svg viewBox="0 0 36 36" class="ptrsvg">
+      <circle class="trk" cx="18" cy="18" r="14"/>
+      <circle class="arc" cx="18" cy="18" r="14"/>
+    </svg>
+  </div>
+</div>
 <div class="wrap">
   <div class="topbar" id="topbar">
     <div class="iconrowbtns">
@@ -446,6 +459,11 @@ const BG=(()=>{
     const k=dt/16.67;                                   // frame-rate normaliser
     const {sky,isDay}=scene;
     ctx.clearRect(0,0,W,H);
+    // sky gradient lives here now (was a CSS layer that slid during overscroll)
+    const gc=(GRAD[isDay?'day':'night'][sky]||GRAD.day.cloud);
+    const sg=ctx.createLinearGradient(0,0,0,H);
+    sg.addColorStop(0,gc[0]); sg.addColorStop(1,gc[1]);
+    ctx.fillStyle=sg; ctx.fillRect(0,0,W,H);
 
     if(!isDay && stars.length){
       for(const s of stars){
@@ -952,10 +970,10 @@ function render(f){
       <div class="city">${f.place}</div>
       <div class="temp">${rnd(c.temp)}&deg;</div>
       <div class="cond">${c.label||''}</div>
-      <div class="hl">H:${rnd(d0.hi)}&deg;&nbsp;&nbsp;L:${rnd(d0.lo)}&deg;</div>
+      <div class="hl">L:${rnd(d0.lo)}&deg;&nbsp;&nbsp;H:${rnd(d0.hi)}&deg;</div>
       ${(c.feelsLike!=null && Math.round(c.feelsLike)!==Math.round(c.temp))
         ? `<div class="feels">Feels like ${rnd(c.feelsLike)}&deg;</div>` : ''}
-      ${f.normal?`<div style="font-size:13px;color:var(--ink-faint);margin-top:2px">Normal ${rnd(f.normal.hi)}&deg; / ${rnd(f.normal.lo)}&deg;</div>`:''}
+      ${f.normal?`<div style="font-size:13px;color:var(--ink-faint);margin-top:2px">Normal ${rnd(f.normal.lo)}&deg; / ${rnd(f.normal.hi)}&deg;</div>`:''}
     </div>
     ${f.narrative?`<div class="card"><div class="cap">Forecast</div><div class="narr">${f.narrative}</div></div>`:''}
     ${f.hourly.length?`<div class="card"><div class="cap">Hourly Forecast</div><div class="hourly">${strip}</div></div>`:''}
@@ -1077,7 +1095,7 @@ function wireDays(){
         ${r('Sunrise',ds.rise?timeHM(ds.rise):null,'sr')}
         ${r('Sunset',ds.set?timeHM(ds.set):null)}
         ${r('Feels like', (d.feelsHi!=null||d.feelsLo!=null)
-              ? [d.feelsHi!=null?rnd(d.feelsHi)+'\u00b0':null, d.feelsLo!=null?rnd(d.feelsLo)+'\u00b0':null]
+              ? [d.feelsLo!=null?rnd(d.feelsLo)+'\u00b0':null, d.feelsHi!=null?rnd(d.feelsHi)+'\u00b0':null]
                 .filter(Boolean).join(' / ') : null)}
         ${r('Wind',d.windMax!=null?rnd(d.windMax)+' '+U().wind:null)}
         ${r('UV index',d.uv!=null?Math.round(d.uv):null)}
@@ -1159,11 +1177,14 @@ async function refresh(force){
   if(lastCoords.lat==null) return;                       // nothing loaded yet
   if(!force && Date.now()-lastLoadTs < STALE_MS) return; // still fresh
   refreshing=true;
-  const ptr=$('#ptr'); ptr.classList.add('spin'); ptr.style.opacity='1'; ptr.style.transform='translateY(0)';
+  const ptr=$('#ptr');
+  const wrap=ptr.querySelector('.ptrwrap'); if(wrap) wrap.style.transform='';
+  ptr.classList.add('spin'); ptr.style.opacity='1'; ptr.style.transform='translateY(0)';
   try{ await load(lastCoords.lat,lastCoords.lon,lastCoords.name,false); }
   finally{
     refreshing=false;
     ptr.classList.remove('spin'); ptr.style.opacity='0'; ptr.style.transform='translateY(-42px)';
+    const a=ptr.querySelector('.arc'); if(a) a.style.strokeDashoffset='87.96';
   }
 }
 
@@ -1190,9 +1211,11 @@ setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
       active=true;
       dist=Math.min(130,d);
       const p=Math.min(1,dist/TH);
-      ptr.style.opacity=p.toFixed(2);
+      ptr.style.opacity=Math.min(1,p*1.3).toFixed(2);
       ptr.style.transform=`translateY(${(dist*0.42-42).toFixed(1)}px)`;
-      ptr.querySelector('.ring').style.transform=`rotate(${(dist*3).toFixed(0)}deg)`;
+      const arc=ptr.querySelector('.arc');
+      if(arc) arc.style.strokeDashoffset=(87.96*(1-p)).toFixed(1);   // arc fills as you pull
+      ptr.querySelector('.ptrwrap').style.transform=`rotate(${(dist*2.2).toFixed(0)}deg)`;
     }
   },{passive:true});
   function end(){
@@ -1200,7 +1223,11 @@ setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
     const go = active && dist>=TH;
     y0=null; active=false;
     if(go){ refresh(true); }
-    else { ptr.style.opacity='0'; ptr.style.transform='translateY(-42px)'; }
+    else {
+      ptr.style.opacity='0'; ptr.style.transform='translateY(-42px)';
+      const a=ptr.querySelector('.arc'); if(a) a.style.strokeDashoffset='87.96';
+      const w=ptr.querySelector('.ptrwrap'); if(w) w.style.transform='';
+    }
     dist=0;
   }
   addEventListener('touchend',end,{passive:true});
