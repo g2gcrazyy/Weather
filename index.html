@@ -36,11 +36,19 @@
   }
   * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
   html,body { height:100%; }
+  /* Gradient lives on <html> so iOS rubber-band overscroll reveals it, not white.
+     background-color is the solid fallback the overscroll area is filled with. */
+  html {
+    background:linear-gradient(180deg,var(--g-top) 0%,var(--g-bot) 100%) no-repeat fixed;
+    background-color:var(--g-bot);
+    transition:background-color 1.2s ease;
+    overscroll-behavior:none;                 /* stop the rubber-band entirely where supported */
+  }
   body {
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
     color:var(--ink);
-    background:linear-gradient(180deg,var(--g-top) 0%,var(--g-bot) 100%);
-    background-attachment:fixed; min-height:100%; transition:background 1.2s ease;
+    background:transparent;
+    min-height:100%; overscroll-behavior:none;
     -webkit-font-smoothing:antialiased;
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
@@ -263,7 +271,9 @@ const GRAD = {
   night:{ clear:['#0e1a33','#2a3a5c'], cloud:['#232c38','#3d4756'], rain:['#1c2733','#374350'], snow:['#28313f','#454f5e'], storm:['#12161d','#2c3038'], fog:['#232c38','#3d4756'] },
 };
 function paint(sky,isDay){ const g=GRAD[isDay?'day':'night'][sky]||GRAD.day.cloud;
-  document.body.style.setProperty('--g-top',g[0]); document.body.style.setProperty('--g-bot',g[1]); }
+  const r=document.documentElement;
+  r.style.setProperty('--g-top',g[0]); r.style.setProperty('--g-bot',g[1]);
+  const m=document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute('content',g[0]); }
 
 const WMO = {
   0:['Clear','clear'],1:['Mainly Clear','clear'],2:['Partly Cloudy','cloud'],3:['Overcast','cloud'],

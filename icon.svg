@@ -1,35 +1,57 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#1f6fd0"/>
-      <stop offset="55%" stop-color="#4a9ae4"/>
-      <stop offset="100%" stop-color="#8fc6f2"/>
+    <radialGradient id="sunG" cx="42%" cy="34%" r="72%">
+      <stop offset="0%"  stop-color="#fff3c4"/>
+      <stop offset="45%" stop-color="#ffd257"/>
+      <stop offset="100%" stop-color="#ff9d21"/>
+    </radialGradient>
+    <radialGradient id="sunGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="60%" stop-color="#ffca4a" stop-opacity=".55"/>
+      <stop offset="100%" stop-color="#ffca4a" stop-opacity="0"/>
+    </radialGradient>
+    <!-- frosted glass body: translucent, brighter at the top edge -->
+    <linearGradient id="glassBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity=".97"/>
+      <stop offset="45%"  stop-color="#f2f7ff" stop-opacity=".80"/>
+      <stop offset="100%" stop-color="#cfe0f5" stop-opacity=".62"/>
     </linearGradient>
-    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#ffe487"/>
-      <stop offset="100%" stop-color="#ffb02e"/>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity=".95"/>
+      <stop offset="55%"  stop-color="#ffffff" stop-opacity=".18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity=".55"/>
     </linearGradient>
-    <linearGradient id="cld" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#dbe6f5"/>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity=".70"/>
+      <stop offset="55%"  stop-color="#ffffff" stop-opacity=".06"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
-    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0b2a4a" flood-opacity=".28"/>
+    <filter id="soften" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="7"/>
     </filter>
+    <filter id="lift" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#123a63" flood-opacity=".22"/>
+    </filter>
+    <clipPath id="cloudClip">
+      <path d="M168 406a80 80 0 0 1-8-159 114 114 0 0 1 218-25 72 72 0 0 1 18 184z"/>
+    </clipPath>
   </defs>
-  <rect width="512" height="512" fill="url(#sky)"/>
-  <g filter="url(#sh)">
-    <circle cx="196" cy="182" r="66" fill="url(#sun)"/>
-    <g fill="#ffd257">
-      <rect x="186" y="72" width="20" height="42" rx="10"/>
-      <rect x="186" y="250" width="20" height="42" rx="10"/>
-      <rect x="76" y="172" width="42" height="20" rx="10"/>
-      <rect x="274" y="172" width="42" height="20" rx="10"/>
-      <rect x="186" y="72" width="20" height="42" rx="10" transform="rotate(45 196 182)"/>
-      <rect x="186" y="250" width="20" height="42" rx="10" transform="rotate(45 196 182)"/>
-      <rect x="76" y="172" width="42" height="20" rx="10" transform="rotate(45 196 182)"/>
-      <rect x="274" y="172" width="42" height="20" rx="10" transform="rotate(45 196 182)"/>
+
+  <!-- transparent canvas: no background rect -->
+  <g filter="url(#lift)">
+    <!-- sun: larger, no rays, tucked behind the cloud -->
+    <circle cx="196" cy="176" r="112" fill="url(#sunGlow)" filter="url(#soften)"/>
+    <circle cx="196" cy="176" r="92" fill="url(#sunG)"/>
+    <circle cx="196" cy="176" r="92" fill="none" stroke="#ffffff" stroke-opacity=".45" stroke-width="3"/>
+
+    <!-- frosted glass cloud -->
+    <g>
+      <path d="M168 406a80 80 0 0 1-8-159 114 114 0 0 1 218-25 72 72 0 0 1 18 184z" fill="url(#glassBody)"/>
+      <g clip-path="url(#cloudClip)">
+        <ellipse cx="150" cy="235" rx="190" ry="86" fill="url(#sheen)"/>
+        <ellipse cx="330" cy="415" rx="150" ry="60" fill="#9fc3e8" opacity=".22"/>
+      </g>
+      <path d="M168 406a80 80 0 0 1-8-159 114 114 0 0 1 218-25 72 72 0 0 1 18 184z"
+            fill="none" stroke="url(#rim)" stroke-width="3.5"/>
     </g>
-    <path d="M172 404a74 74 0 0 1-7-147 106 106 0 0 1 202-23 67 67 0 0 1 17 170z" fill="url(#cld)"/>
   </g>
 </svg>
