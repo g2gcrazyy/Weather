@@ -142,6 +142,13 @@
   .tile .big { font-size:27px; font-weight:300; margin-top:6px; }
   .tile .note { font-size:13px; color:var(--ink-dim); margin-top:4px; }
 
+  .unitbar { display:flex; justify-content:center; gap:0; margin:18px auto 0; width:132px;
+    background:var(--card); border:1px solid var(--card-line); border-radius:11px; overflow:hidden;
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  .unitbar button { flex:1; background:none; border:none; color:var(--ink-dim);
+    font-size:14px; font-weight:600; padding:9px 0; cursor:pointer; }
+  .unitbar button.on { color:var(--ink); background:rgba(255,255,255,.24); }
+
   .foot { text-align:center; color:var(--ink-faint); font-size:12px; margin-top:20px; line-height:1.5; }
   .setup { background:rgba(0,0,0,.22); border:1px solid var(--card-line); border-radius:14px; padding:14px 16px; margin-top:12px; font-size:13.5px; line-height:1.5; color:var(--ink-dim); }
   .setup b { color:var(--ink); }
@@ -166,6 +173,9 @@
     <div class="results" id="results" style="display:none"></div>
   </div>
   <div id="app"><div class="msg"><div class="spinner"></div>Getting your weather&#8230;</div></div>
+  <div class="unitbar">
+    <button id="u-c" class="on">&deg;C</button><button id="u-f">&deg;F</button>
+  </div>
   <div class="foot" id="foot"></div>
 </div>
 
@@ -193,9 +203,38 @@ const CONFIG = {
 const $ = s => document.querySelector(s);
 const app = $('#app');
 let lastCoords = { lat:null, lon:null, name:null };
-let CURRENT_F = null;
+let CURRENT_F = null, CURRENT_RAW = null;
 
 /* ---- saved preferences (source + last city). Falls back to memory if storage is blocked. ---- */
+let UNIT='C';                                  // 'C' | 'F' — display only; data stays metric
+const toF   = v => v==null||isNaN(v) ? v : v*9/5+32;
+const toMph = v => v==null||isNaN(v) ? v : v*0.621371;   // km/h -> mph
+const toInHg= v => v==null||isNaN(v) ? v : v*0.0295300;  // hPa  -> inHg
+const toIn  = v => v==null||isNaN(v) ? v : v/25.4;       // mm   -> in
+const toMi  = v => v==null||isNaN(v) ? v : v*0.621371;   // km   -> mi
+/* Unit labels + precision for the current display system. */
+const U = () => UNIT==='F'
+  ? { wind:'mph', press:'inHg', pressDp:2, precip:'in',  precipDp:2, vis:'mi' }
+  : { wind:'km/h', press:'hPa', pressDp:0, precip:'mm', precipDp:1, vis:'km' };
+const conv = v => UNIT==='F' ? toF(v) : v;
+/* Convert a normalized model for display, keeping Celsius in *C fields for the heat colours. */
+function toDisplayUnits(f){
+  if(UNIT!=='F') return f;
+  const pt = e => ({...e, tempC:e.temp, temp:toF(e.temp), feelsLike:toF(e.feelsLike), dewPoint:toF(e.dewPoint),
+                    windSpeed:toMph(e.windSpeed), gust:toMph(e.gust), pressure:toInHg(e.pressure)});
+  return {...f,
+    current:{...f.current, tempC:f.current.temp, temp:toF(f.current.temp),
+             feelsLike:toF(f.current.feelsLike), dewPoint:toF(f.current.dewPoint),
+             windSpeed:toMph(f.current.windSpeed), gust:toMph(f.current.gust),
+             pressure:toInHg(f.current.pressure), visibility:toMi(f.current.visibility)},
+    hourly:(f.hourly||[]).map(pt),
+    periods:(f.periods||[]).map(pt),
+    daily:(f.daily||[]).map(d=>({...d, hiC:d.hi, loC:d.lo, hi:toF(d.hi), lo:toF(d.lo),
+             precip:toIn(d.precip), windMax:toMph(d.windMax)})),
+    normal:f.normal?{hi:toF(f.normal.hi), lo:toF(f.normal.lo)}:null,
+  };
+}
+
 const PREF_KEY='weatherapp.prefs';
 let memPrefs=null;
 function loadPrefs(){
@@ -568,7 +607,7 @@ function lineChart(H,opts){
   const x=i=>L+(n===1?0:(i/(n-1))*(R-L));
   const y=v=>TOP+PH-((v-vmin)/span)*PH;
 
-  const pts=H.map((h,i)=>h[key]==null?null:[x(i),y(h[key]),h[key]]).filter(Boolean);
+  const pts=H.map((h,i)=>h[key]==null?null:[x(i),y(h[key]),(h.tempC!=null?h.tempC:h[key])]).filter(Boolean);
   const line=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
   const area=line+` L${pts[pts.length-1][0].toFixed(1)} ${TOP+PH} L${pts[0][0].toFixed(1)} ${TOP+PH} Z`;
   const uid='c'+Math.random().toString(36).slice(2,8);
@@ -641,6 +680,7 @@ function buildCharts(H,heading){
 }
 
 function render(f){
+  f=toDisplayUnits(f);
   const c=f.current; paint(c.sky,c.isDay);
   const d0=f.daily[0]||{};
   /* ---- daily rows: lo and hi flanking the bar, click to expand ---- */
@@ -708,15 +748,15 @@ function render(f){
     ${dailyCard}
     <div class="tiles">
       <div class="tile"><div class="cap">Feels Like</div><div class="big">${rnd(c.feelsLike)}&deg;</div><div class="note">Actual ${rnd(c.temp)}&deg;</div></div>
-      <div class="tile"><div class="cap">Precip Today</div><div class="big">${d0.precip==null?'&#8212;':(+d0.precip).toFixed(1)} mm</div><div class="note">${d0.pop!=null?d0.pop+'% chance':''}</div></div>
-      <div class="tile"><div class="cap">Wind</div><div class="big">${rnd(c.windSpeed)} <span style="font-size:15px">km/h</span></div><div class="note">${windDir(c.windDir)} &middot; gusts ${rnd(c.gust)}</div></div>
+      <div class="tile"><div class="cap">Precip Today</div><div class="big">${d0.precip==null?'&#8212;':(+d0.precip).toFixed(U().precipDp)} ${U().precip}</div><div class="note">${d0.pop!=null?d0.pop+'% chance':''}</div></div>
+      <div class="tile"><div class="cap">Wind</div><div class="big">${rnd(c.windSpeed)} <span style="font-size:15px">${U().wind}</span></div><div class="note">${windDir(c.windDir)} &middot; gusts ${rnd(c.gust)}</div></div>
       <div class="tile"><div class="cap">Humidity</div><div class="big">${rnd(c.humidity)}%</div><div class="note">Cloud ${rnd(c.cloud)}%</div></div>
       ${(uv==null && c.dewPoint!=null)
         ? `<div class="tile"><div class="cap">Dew Point</div><div class="big">${rnd(c.dewPoint)}&deg;</div><div class="note">Humidity ${rnd(c.humidity)}%</div></div>`
         : `<div class="tile"><div class="cap">UV Index</div><div class="big">${uv==null?'&#8212;':Math.round(uv)}</div><div class="note">${uvNote}</div></div>`}
-      <div class="tile"><div class="cap">Visibility</div><div class="big">${vis==null?'&#8212;':vis.toFixed(0)} <span style="font-size:15px">km</span></div><div class="note"></div></div>
+      <div class="tile"><div class="cap">Visibility</div><div class="big">${vis==null?'&#8212;':vis.toFixed(0)} <span style="font-size:15px">${U().vis}</span></div><div class="note"></div></div>
       <div class="tile"><div class="cap">Sunrise</div><div class="big">${d0.sunrise?timeHM(d0.sunrise):'&#8212;'}</div><div class="note">${d0.sunset?'Sunset '+timeHM(d0.sunset):''}</div></div>
-      <div class="tile"><div class="cap">Pressure</div><div class="big">${rnd(c.pressure)}</div><div class="note">hPa</div></div>
+      <div class="tile"><div class="cap">Pressure</div><div class="big">${c.pressure==null?'&#8212;':(+c.pressure).toFixed(U().pressDp)}</div><div class="note">${U().press}</div></div>
     </div>`;
   $('#foot').innerHTML='Source: '+f.source+(c.time?' &middot; observed '+timeHM(c.time):'');
   CURRENT_F=f;
@@ -742,6 +782,7 @@ async function load(lat,lon,name,remember){
     if(CONFIG.source==='twn'){ f=await fetchTWN(lat,lon,name); if(!f){ setupCard(); return; } }
     else if(CONFIG.source==='comb'){ f=await fetchCombined(lat,lon,name); if(!f){ setupCard(); return; } }
     else { f=await fetchGEM(lat,lon,name); }
+    CURRENT_RAW=f;
     render(f);
   }catch(e){ app.innerHTML=`<div class="msg">Couldn't load the forecast.<br><small style="color:var(--ink-faint)">${e.message}</small></div>`; }
 }
@@ -758,6 +799,18 @@ function setSource(src){
 $('#src-gem').addEventListener('click',()=>setSource('gem'));
 $('#src-twn').addEventListener('click',()=>setSource('twn'));
 $('#src-comb').addEventListener('click',()=>setSource('comb'));
+
+function markUnit(u){
+  $('#u-c').classList.toggle('on',u==='C');
+  $('#u-f').classList.toggle('on',u==='F');
+}
+function setUnit(u){
+  if(u===UNIT) return;
+  UNIT=u; savePrefs({ unit:u }); markUnit(u);
+  if(CURRENT_F) render(CURRENT_RAW || CURRENT_F);       // re-render from the metric original
+}
+$('#u-c').addEventListener('click',()=>setUnit('C'));
+$('#u-f').addEventListener('click',()=>setUnit('F'));
 
 function enhanceScroll(){
   document.querySelectorAll('.cscroll, .hourly').forEach(el=>{
@@ -802,8 +855,8 @@ function wireDays(){
       const r=(k,v)=> v==null||v===''?'':`<div class="r"><span>${k}</span><span>${v}</span></div>`;
       box.innerHTML=`<div class="cond">${d.label||''}</div><div class="grid">
         ${r('Chance of rain',d.pop!=null?d.pop+'%':null)}
-        ${r('Precipitation',d.precip!=null?(+d.precip).toFixed(1)+' mm':null)}
-        ${r('Wind',d.windMax!=null?rnd(d.windMax)+' km/h':null)}
+        ${r('Precipitation',d.precip!=null?(+d.precip).toFixed(U().precipDp)+' '+U().precip:null)}
+        ${r('Wind',d.windMax!=null?rnd(d.windMax)+' '+U().wind:null)}
         ${r('UV index',d.uv!=null?Math.round(d.uv):null)}
         ${r('Sunrise',d.sunrise?timeHM(d.sunrise):(sunFor(d.date).sunrise?timeHM(sunFor(d.date).sunrise):null))}
         ${r('Sunset',d.sunset?timeHM(d.sunset):(sunFor(d.date).sunset?timeHM(sunFor(d.date).sunset):null))}
@@ -864,6 +917,8 @@ async function autoLocate(){
   if(pr.source==='gem'||pr.source==='twn'||pr.source==='comb'){
     CONFIG.source=pr.source; markSource(pr.source);
   }
+  if(pr.unit==='C'||pr.unit==='F'){ UNIT=pr.unit; }
+  markUnit(UNIT);
   if(typeof pr.lat==='number' && typeof pr.lon==='number'){
     if(pr.name) $('#q').value=pr.name;
     load(pr.lat,pr.lon,pr.name||null);
