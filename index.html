@@ -225,6 +225,15 @@
   .spinner { width:26px; height:26px; border:3px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; margin:0 auto 14px; animation:spin .8s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
   @media (prefers-reduced-motion:reduce){ .spinner{ animation:none; } body{ transition:none; } }
+  /* location banner — shown only when the position on screen might be wrong */
+  .locbar { display:flex; align-items:center; gap:10px; margin:0 0 12px; padding:9px 12px;
+    border-radius:14px; background:var(--card); border:1px solid var(--card-line);
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  .locbar[hidden] { display:none; }
+  .locbar .locmsg { flex:1; font-size:13.5px; line-height:1.35; color:var(--ink-dim); }
+  .locbar .locact { flex:none; background:rgba(255,255,255,.24); border:1px solid var(--card-line);
+    color:var(--ink); font-size:13px; font-weight:600; padding:6px 12px; border-radius:10px;
+    cursor:pointer; white-space:nowrap; }
 </style>
 
 <canvas id="bg" aria-hidden="true"></canvas>
@@ -263,6 +272,10 @@
       </button>
       <div class="results" id="results" style="display:none"></div>
     </div>
+  </div>
+  <div class="locbar" id="locbar" hidden>
+    <span class="locmsg" id="locmsg"></span>
+    <button class="locact" id="locact">Use GPS</button>
   </div>
   <div id="app"><div class="msg"><div class="spinner"></div>Getting your weather&#8230;</div></div>
   <div class="srcbar">
@@ -866,12 +879,14 @@ async function reverseName(lat,lon){
   }catch(e){ return 'Current Location'; }
 }
 
-/* IP-based location — what The Weather Network uses. No permission prompt, city-accurate. */
+/* IP-based location — no permission prompt. On Wi-Fi it's city-accurate; on cellular it
+   reports the carrier's gateway, which can be a different city entirely. We therefore also
+   return the ISP, so the result can be used as a *network fingerprint* (see sameNetwork). */
 async function ipLocate(){
   const tries=[
-    ['https://ipwho.is/', j=> j&&j.success!==false&&j.latitude!=null ? {lat:j.latitude, lon:j.longitude, name:j.city} : null],
-    ['https://ipapi.co/json/', j=> j&&j.latitude!=null ? {lat:j.latitude, lon:j.longitude, name:j.city} : null],
-    ['https://get.geojs.io/v1/ip/geo.json', j=> j&&j.latitude!=null ? {lat:+j.latitude, lon:+j.longitude, name:j.city} : null],
+    ['https://ipwho.is/', j=> j&&j.success!==false&&j.latitude!=null ? {lat:j.latitude, lon:j.longitude, name:j.city, isp:j.connection?.isp||j.connection?.org||null} : null],
+    ['https://ipapi.co/json/', j=> j&&j.latitude!=null ? {lat:j.latitude, lon:j.longitude, name:j.city, isp:j.org||null} : null],
+    ['https://get.geojs.io/v1/ip/geo.json', j=> j&&j.latitude!=null ? {lat:+j.latitude, lon:+j.longitude, name:j.city, isp:j.organization_name||null} : null],
   ];
   for(const [url,pick] of tries){
     try{
@@ -1109,22 +1124,33 @@ function setupCard(){
   $('#foot').innerHTML='';
 }
 
-let lastLoadTs=0;
+let lastLoadTs=0, loadSeq=0;
 async function load(lat,lon,name,remember){
+  const seq=++loadSeq;                       // a newer load supersedes this one (see below)
   lastCoords={lat,lon,name};
   if(remember!==false) savePrefs({ lat, lon, name: name||null });
   app.innerHTML='<div class="msg"><div class="spinner"></div>Loading forecast&#8230;</div>';
   try{
-    if(!name) name=await reverseName(lat,lon);
+    if(!name){
+      name=await reverseName(lat,lon);
+      // keep the resolved name so refreshes don't reverse-geocode again, and so the
+      // next launch has a city to show while it loads
+      if(seq===loadSeq){
+        lastCoords.name=name;
+        if(remember!==false) savePrefs({ name });
+      }
+    }
     let f;
     if(CONFIG.source==='twn'){ f=await fetchTWN(lat,lon,name); if(!f){ setupCard(); return; } }
     else if(CONFIG.source==='comb'){ f=await fetchCombined(lat,lon,name); if(!f){ setupCard(); return; } }
     else { f=await fetchGEM(lat,lon,name); }
+    if(seq!==loadSeq) return;                // a newer load already won; don't paint over it
     CURRENT_RAW=f;
     lastLoadTs=Date.now();
     addPlace({lat,lon,name});
     render(f);
-  }catch(e){ app.innerHTML=`<div class="msg">Couldn't load the forecast.<br><small style="color:var(--ink-faint)">${e.message}</small></div>`; }
+  }catch(e){ if(seq!==loadSeq) return;
+    app.innerHTML=`<div class="msg">Couldn't load the forecast.<br><small style="color:var(--ink-faint)">${e.message}</small></div>`; }
 }
 
 function markSource(src){
@@ -1233,7 +1259,8 @@ $('#q').addEventListener('input',e=>{
   },250);
 });
 $('#results').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return;
-  closeSearch(); $('#q').value=b.dataset.name; load(+b.dataset.lat,+b.dataset.lon,b.dataset.name||null); });
+  closeSearch(); hideBanner(); savePrefs({ manual:true });   // deliberate pick: stop tracking location
+  $('#q').value=b.dataset.name; load(+b.dataset.lat,+b.dataset.lon,b.dataset.name||null); });
 document.addEventListener('click',e=>{
   if(!e.target.closest('.topbar')) closeSearch();
 });
@@ -1255,29 +1282,93 @@ $('#geo').addEventListener('click',useGeo);
 $('#clear').addEventListener('click',()=>{
   const q=$('#q'); q.value=''; $('#results').style.display='none'; q.focus();
 });
+/* ======================= location =======================
+   An iOS home-screen web app doesn't keep the geolocation grant across launches, so every
+   GPS call costs a permission prompt. The IP lookup is free but reports the carrier's
+   gateway on cellular, which can be the wrong city. The way out: store the last GPS fix
+   together with the IP reading seen at the moment it was taken, then use the IP lookup only
+   to answer "am I on the same network as when I fixed?" — a question it answers reliably
+   even when its coordinates are wrong, because a given gateway is stable. Same network ->
+   reuse the fix silently. Different network -> you probably moved, so offer one tap. */
+const FIX_TTL_MS = 7*24*60*60*1000;   // a cached fix older than this is no longer trusted
+const NEAR_KM    = 25;                // IP readings this close count as the same area
+
+function getFix(){
+  const f=loadPrefs().gpsFix;
+  if(!f || typeof f.lat!=='number' || !f.ts) return null;
+  return (Date.now()-f.ts > FIX_TTL_MS) ? null : f;
+}
+function saveFix(lat,lon,name,ip){
+  savePrefs({ gpsFix:{ lat, lon, name:name||null, ts:Date.now(),
+    ip: ip ? { lat:ip.lat, lon:ip.lon, isp:ip.isp||null } : null } });
+}
+function kmBetween(a,b){
+  if(!a || !b || a.lat==null || b.lat==null) return Infinity;
+  const R=6371, rad=d=>d*Math.PI/180;
+  const dLat=rad(b.lat-a.lat), dLon=rad(b.lon-a.lon);
+  const s=Math.sin(dLat/2)**2 + Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.min(1,Math.sqrt(s)));
+}
+/* Is this IP reading the same one we saw when the fix was taken? */
+function sameNetwork(now, then){
+  if(!now || !then) return false;
+  const a=(now.isp||'').toLowerCase().trim(), b=(then.isp||'').toLowerCase().trim();
+  if(a && b && a!==b) return false;                 // different ISP/carrier -> different situation
+  if(now.lat==null || then.lat==null) return !!(a && a===b);
+  return kmBetween(now,then) < NEAR_KM;             // same gateway area (wrong city, but consistently so)
+}
+
+function showBanner(msg,action){
+  $('#locmsg').textContent=msg;
+  $('#locact').textContent=action;
+  $('#locbar').hidden=false;
+}
+function hideBanner(){ $('#locbar').hidden=true; }
+$('#locact').addEventListener('click',useGeo);
+
+/* The ⊙ button and the banner — the only things that ask for GPS, and so the only things
+   that can raise a permission prompt. */
 function useGeo(){
-  closeSearch();
+  closeSearch(); hideBanner();
   if(!navigator.geolocation){ return autoLocate(); }
   app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
+  const ipP=ipLocate().catch(()=>null);      // fingerprint for this fix, fetched in parallel
   navigator.geolocation.getCurrentPosition(
-    p=>load(p.coords.latitude,p.coords.longitude,null),
+    async p=>{
+      const lat=p.coords.latitude, lon=p.coords.longitude;
+      savePrefs({ manual:false });
+      await load(lat,lon,null);
+      saveFix(lat,lon,lastCoords.name,await ipP);
+    },
     ()=>autoLocate(),                                   // denied/failed -> IP, never a hardcoded guess
     {timeout:8000,maximumAge:600000,enableHighAccuracy:true});
 }
 
-/* Startup location: IP first — no permission prompt, same approach TWN uses. */
+/* Startup location. Never prompts: paints the cached fix immediately, then checks the
+   network in the background and only asks for GPS when something actually looks off. */
 async function autoLocate(){
-  app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
+  savePrefs({ manual:false });
+  const fix=getFix(), pr=loadPrefs();
+
+  if(fix)                           load(fix.lat, fix.lon, fix.name||null);
+  else if(typeof pr.lat==='number') load(pr.lat, pr.lon, pr.name||null);
+  else app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
+
   const ip=await ipLocate();
-  if(ip){ load(ip.lat, ip.lon, ip.name||null); return; }
-  if(navigator.geolocation){
-    navigator.geolocation.getCurrentPosition(
-      p=>load(p.coords.latitude,p.coords.longitude,null),
-      ()=>{ app.innerHTML='<div class="msg">Couldn\'t determine your location.<br>Search for a city above.</div>'; },
-      {timeout:8000,maximumAge:600000});
-  } else {
-    app.innerHTML='<div class="msg">Couldn\'t determine your location.<br>Search for a city above.</div>';
+
+  if(fix){
+    if(!ip) return;                                   // no network reading -> trust the fix, stay quiet
+    if(sameNetwork(ip, fix.ip)) return;               // same place as the last fix -> silent, no prompt
+    showBanner('You may have moved since this location was set.','Update');
+    return;
   }
+  if(!ip){
+    if(typeof pr.lat!=='number')
+      app.innerHTML='<div class="msg">Couldn\'t determine your location.<br>Search for a city above.</div>';
+    return;
+  }
+  load(ip.lat, ip.lon, ip.name||null);
+  showBanner('Approximate location, based on your network.','Use GPS');
 }
 
 /* ==================== saved locations ==================== */
@@ -1354,7 +1445,8 @@ $('#placelist').addEventListener('click',e=>{
   if(del){ e.stopPropagation(); removePlace(+del.dataset.del); return; }
   const card=e.target.closest('.pcard'); if(!card) return;
   const pl=getPlaces()[+card.dataset.i]; if(!pl) return;
-  closeSheet(); $('#q').value=pl.name; load(pl.lat,pl.lon,pl.name);
+  closeSheet(); hideBanner(); savePrefs({ manual:true });    // deliberate pick: stop tracking location
+  $('#q').value=pl.name; load(pl.lat,pl.lon,pl.name);
 });
 
 /* search inside the sheet -> adds and switches */
@@ -1462,8 +1554,10 @@ setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
   }
   if(pr.unit==='C'||pr.unit==='F'){ UNIT=pr.unit; }
   markUnit(UNIT);
-  if(typeof pr.lat==='number' && typeof pr.lon==='number'){
-    if(pr.name) $('#q').value=pr.name;
+  if(pr.name) $('#q').value=pr.name;
+  // A city you picked yourself stays put. Otherwise run the location flow, which paints the
+  // cached fix instantly and decides in the background whether it's still right.
+  if(pr.manual===true && typeof pr.lat==='number' && typeof pr.lon==='number'){
     load(pr.lat,pr.lon,pr.name||null);
   } else {
     autoLocate();
