@@ -1124,11 +1124,15 @@ function setupCard(){
   $('#foot').innerHTML='';
 }
 
-let lastLoadTs=0, loadSeq=0;
-async function load(lat,lon,name,remember){
+let lastLoadTs=0, loadSeq=0, lastApprox=false;
+/* approx: an IP-derived guess. It renders, but is never written to prefs and never joins
+   saved places, so a wrong guess can't outlive the session it was made in. */
+async function load(lat,lon,name,remember,approx){
   const seq=++loadSeq;                       // a newer load supersedes this one (see below)
+  const keep = remember!==false && !approx;
+  lastApprox=!!approx;
   lastCoords={lat,lon,name};
-  if(remember!==false) savePrefs({ lat, lon, name: name||null });
+  if(keep) savePrefs({ lat, lon, name: name||null });
   app.innerHTML='<div class="msg"><div class="spinner"></div>Loading forecast&#8230;</div>';
   try{
     if(!name){
@@ -1137,7 +1141,7 @@ async function load(lat,lon,name,remember){
       // next launch has a city to show while it loads
       if(seq===loadSeq){
         lastCoords.name=name;
-        if(remember!==false) savePrefs({ name });
+        if(keep) savePrefs({ name });
       }
     }
     let f;
@@ -1147,7 +1151,7 @@ async function load(lat,lon,name,remember){
     if(seq!==loadSeq) return;                // a newer load already won; don't paint over it
     CURRENT_RAW=f;
     lastLoadTs=Date.now();
-    addPlace({lat,lon,name});
+    if(!approx) addPlace({lat,lon,name});
     render(f);
   }catch(e){ if(seq!==loadSeq) return;
     app.innerHTML=`<div class="msg">Couldn't load the forecast.<br><small style="color:var(--ink-faint)">${e.message}</small></div>`; }
@@ -1309,6 +1313,15 @@ function kmBetween(a,b){
   const s=Math.sin(dLat/2)**2 + Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2;
   return 2*R*Math.asin(Math.min(1,Math.sqrt(s)));
 }
+/* A VPN or datacentre exit tells us nothing about where the phone actually is: the position
+   is the exit node's, and the "network" would match anywhere in the world you dial the same
+   VPN from. So such readings are never stored as a fingerprint, never used as a position,
+   and never used to invalidate a fix — they're treated as no information at all.
+   ipwho.is exposes no proxy flag on the free tier, so this matches the ISP/org name. False
+   positives are cheap (we just keep showing the cached fix); false negatives are the status quo. */
+const VPN_ISP=/\b(vpn|proxy|hosting|host|datacenter|data ?centre|colo|cloud|server|m247|datacamp|mullvad|nordvpn|expressvpn|surfshark|cyberghost|protonvpn|private internet|ovh|digitalocean|linode|vultr|choopa|leaseweb|hetzner|amazon|aws|azure|microsoft|google llc|cloudflare|g-?core|packethub|zenlayer|contabo|oracle|alibaba|tencent)\b/i;
+const looksLikeVPN = ip => !!ip && VPN_ISP.test(ip.isp||'');
+
 /* Is this IP reading the same one we saw when the fix was taken? */
 function sameNetwork(now, then){
   if(!now || !then) return false;
@@ -1338,7 +1351,10 @@ function useGeo(){
       const lat=p.coords.latitude, lon=p.coords.longitude;
       savePrefs({ manual:false });
       await load(lat,lon,null);
-      saveFix(lat,lon,lastCoords.name,await ipP);
+      const ip=await ipP;
+      // A VPN reading would fingerprint the tunnel, not the place. Store the fix without one:
+      // a fix with no fingerprint is simply trusted until it ages out.
+      saveFix(lat,lon,lastCoords.name, looksLikeVPN(ip) ? null : ip);
     },
     ()=>autoLocate(),                                   // denied/failed -> IP, never a hardcoded guess
     {timeout:8000,maximumAge:600000,enableHighAccuracy:true});
@@ -1355,10 +1371,12 @@ async function autoLocate(){
   else app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
 
   const ip=await ipLocate();
+  const vpn=looksLikeVPN(ip);
 
   if(fix){
-    if(!ip) return;                                   // no network reading -> trust the fix, stay quiet
-    if(sameNetwork(ip, fix.ip)) return;               // same place as the last fix -> silent, no prompt
+    if(!ip || vpn) return;               // no reading, or a tunnel -> no information; trust the fix
+    if(!fix.ip) return;                  // fix stored without a fingerprint -> nothing to compare
+    if(sameNetwork(ip, fix.ip)) return;  // same place as the last fix -> silent, no prompt
     showBanner('You may have moved since this location was set.','Update');
     return;
   }
@@ -1367,7 +1385,16 @@ async function autoLocate(){
       app.innerHTML='<div class="msg">Couldn\'t determine your location.<br>Search for a city above.</div>';
     return;
   }
-  load(ip.lat, ip.lon, ip.name||null);
+  if(vpn){
+    // Showing the exit node's city as "your" location is worse than showing nothing.
+    if(typeof pr.lat!=='number')
+      app.innerHTML='<div class="msg">Can\'t place you while a VPN is on.<br>Use GPS or search for a city.</div>';
+    showBanner('A VPN is hiding your location.','Use GPS');
+    return;
+  }
+  // Approximate: transient, so a wrong guess is never remembered as your location or
+  // auto-added to saved places.
+  load(ip.lat, ip.lon, ip.name||null, false, true);
   showBanner('Approximate location, based on your network.','Use GPS');
 }
 
@@ -1490,7 +1517,7 @@ async function refresh(force){
   const ptr=$('#ptr');
   const wrap=ptr.querySelector('.ptrwrap'); if(wrap) wrap.style.transform='';
   ptr.classList.add('spin'); ptr.style.opacity='1'; ptr.style.transform='translateY(0)';
-  try{ await load(lastCoords.lat,lastCoords.lon,lastCoords.name,false); }
+  try{ await load(lastCoords.lat,lastCoords.lon,lastCoords.name,false,lastApprox); }
   finally{
     refreshing=false;
     ptr.classList.remove('spin'); ptr.style.opacity='0'; ptr.style.transform='translateY(-72px)';
@@ -1548,6 +1575,13 @@ setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
 
 /* ---- startup: restore saved source + city, else ask for location ---- */
 (function start(){
+  // One-time cleanup: earlier builds saved IP guesses as if they were your location, so a
+  // reading taken behind a VPN (or a mislocated ISP gateway) could stick. Drop those; a city
+  // you picked yourself is kept.
+  if(loadPrefs().prefsVersion!==2){
+    if(loadPrefs().manual!==true) savePrefs({ lat:null, lon:null, name:null });
+    savePrefs({ prefsVersion:2 });
+  }
   const pr=loadPrefs();
   if(pr.source==='gem'||pr.source==='twn'||pr.source==='comb'){
     CONFIG.source=pr.source; markSource(pr.source);
