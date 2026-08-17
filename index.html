@@ -1339,15 +1339,29 @@ function showBanner(msg,action){
 function hideBanner(){ $('#locbar').hidden=true; }
 $('#locact').addEventListener('click',useGeo);
 
+/* Why GPS last failed, so the banner can say something useful instead of silently falling
+   back to IP — "it just doesn't work" is impossible to diagnose from the outside.
+   Code 1 (PERMISSION_DENIED) on iOS usually arrives with NO prompt shown at all: the block
+   is in Settings, not in the page, so retrying can't help until it's changed there. */
+let geoErrMsg=null;
+function geoFail(err){
+  const c=err&&err.code;
+  geoErrMsg = c===1 ? 'Location is blocked for this app in iOS Settings ▸ Privacy & Security ▸ Location Services.'
+            : c===3 ? 'GPS timed out.'
+            : c===2 ? 'GPS is unavailable right now.'
+            : 'GPS failed'+(err&&err.message?' ('+err.message+')':'')+'.';
+}
+
 /* The ⊙ button and the banner — the only things that ask for GPS, and so the only things
    that can raise a permission prompt. */
 function useGeo(){
   closeSearch(); hideBanner();
-  if(!navigator.geolocation){ return autoLocate(); }
+  if(!navigator.geolocation){ geoErrMsg='This browser has no location support.'; return autoLocate(); }
   app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
   const ipP=ipLocate().catch(()=>null);      // fingerprint for this fix, fetched in parallel
   navigator.geolocation.getCurrentPosition(
     async p=>{
+      geoErrMsg=null;
       const lat=p.coords.latitude, lon=p.coords.longitude;
       savePrefs({ manual:false });
       await load(lat,lon,null);
@@ -1356,8 +1370,10 @@ function useGeo(){
       // a fix with no fingerprint is simply trusted until it ages out.
       saveFix(lat,lon,lastCoords.name, looksLikeVPN(ip) ? null : ip);
     },
-    ()=>autoLocate(),                                   // denied/failed -> IP, never a hardcoded guess
-    {timeout:8000,maximumAge:600000,enableHighAccuracy:true});
+    err=>{ geoFail(err); autoLocate(); },               // failed -> IP, but say why
+    // Coarse is enough for city weather, and it resolves from wi-fi/cell far more reliably
+    // than a cold high-accuracy GPS lock, which was timing out inside 8s.
+    {timeout:20000,maximumAge:60000,enableHighAccuracy:false});
 }
 
 /* Startup location. Never prompts: paints the cached fix immediately, then checks the
@@ -1395,7 +1411,9 @@ async function autoLocate(){
   // Approximate: transient, so a wrong guess is never remembered as your location or
   // auto-added to saved places.
   load(ip.lat, ip.lon, ip.name||null, false, true);
-  showBanner('Approximate location, based on your network.','Use GPS');
+  showBanner(geoErrMsg ? geoErrMsg+' Showing an approximate location.'
+                       : 'Approximate location, based on your network.',
+             geoErrMsg ? 'Retry' : 'Use GPS');
 }
 
 /* ==================== saved locations ==================== */
