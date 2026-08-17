@@ -1360,26 +1360,54 @@ function useGeo(){
   closeSearch(); hideBanner();
   if(!navigator.geolocation){ geoErrMsg='This browser has no location support.'; return autoLocate(); }
   app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
-  const ipP=ipLocate().catch(()=>null);      // fingerprint for this fix, fetched in parallel
-  navigator.geolocation.getCurrentPosition(
-    async p=>{
-      geoErrMsg=null;
-      const lat=p.coords.latitude, lon=p.coords.longitude;
-      savePrefs({ manual:false });
-      await load(lat,lon,null);
-      const ip=await ipP;
-      // A VPN reading would fingerprint the tunnel, not the place. Store the fix without one:
-      // a fix with no fingerprint is simply trusted until it ages out.
-      saveFix(lat,lon,lastCoords.name, looksLikeVPN(ip) ? null : ip);
-    },
-    err=>{ geoFail(err); autoLocate(); },               // failed -> IP, but say why
-    // Coarse is enough for city weather, and it resolves from wi-fi/cell far more reliably
-    // than a cold high-accuracy GPS lock, which was timing out inside 8s.
-    {timeout:20000,maximumAge:60000,enableHighAccuracy:false});
+  savePrefs({ manual:false });
+  gpsFix().then(p=>acceptFix(p,null))
+          .catch(err=>{ geoFail(err); autoLocate(); });   // failed -> IP, but say why
 }
 
-/* Startup location. Never prompts: paints the cached fix immediately, then checks the
-   network in the background and only asks for GPS when something actually looks off. */
+/* Reopening the app in a different city should just work, now that a granted permission
+   makes GPS silent. Only re-fixes when the cached one has gone stale, and never when you've
+   deliberately pinned a city. */
+const REFIX_MS = 10*60*1000;
+async function refreshLocation(){
+  if(loadPrefs().manual===true) return;
+  const fix=getFix();
+  if(fix && Date.now()-fix.ts < REFIX_MS) return;
+  if(await geoPermission()!=='granted') return;          // never prompt on a resume
+  try{ await acceptFix(await gpsFix({timeout:15000,maximumAge:300000,enableHighAccuracy:false}), fix); }
+  catch(e){}                                             // silent: the cached fix still stands
+}
+
+/* Current permission state, without asking for anything. 'granted' means getCurrentPosition
+   resolves silently — no prompt — so GPS is free to use. Null = the API isn't available. */
+async function geoPermission(){
+  try{ return (await navigator.permissions.query({name:'geolocation'})).state; }
+  catch(e){ return null; }
+}
+/* getCurrentPosition as a promise. Coarse accuracy: city-level is all a forecast needs, and it
+   resolves from wi-fi/cell rather than waiting on a cold satellite lock. */
+function gpsFix(opts){
+  return new Promise((res,rej)=>{
+    if(!navigator.geolocation) return rej({code:2,message:'no geolocation'});
+    navigator.geolocation.getCurrentPosition(res,rej,
+      opts||{timeout:20000,maximumAge:60000,enableHighAccuracy:false});
+  });
+}
+/* Record a GPS position as the current location and cache it for next launch. */
+async function acceptFix(p, prev){
+  geoErrMsg=null;
+  const lat=p.coords.latitude, lon=p.coords.longitude;
+  // Skip the reload when we're already showing this spot — the cached paint was right.
+  if(!prev || kmBetween({lat,lon},prev)>1) await load(lat,lon,null);
+  const ip=await ipLocate().catch(()=>null);
+  saveFix(lat,lon,lastCoords.name, looksLikeVPN(ip)?null:ip);
+  hideBanner();
+}
+
+/* Startup location. Paints the cached fix immediately so there's never a blank wait, then:
+   if the geolocation grant is already in place, takes a real GPS fix silently — that's the
+   accurate answer and it costs nothing. Only when GPS is unavailable does it fall back to
+   the IP reading and the network-fingerprint check below. */
 async function autoLocate(){
   savePrefs({ manual:false });
   const fix=getFix(), pr=loadPrefs();
@@ -1387,6 +1415,14 @@ async function autoLocate(){
   if(fix)                           load(fix.lat, fix.lon, fix.name||null);
   else if(typeof pr.lat==='number') load(pr.lat, pr.lon, pr.name||null);
   else app.innerHTML='<div class="msg"><div class="spinner"></div>Finding your location&#8230;</div>';
+
+  // 'granted' -> silent. Null means the Permissions API is missing, in which case a previous
+  // successful fix is our evidence that a grant exists.
+  const st=await geoPermission();
+  if(st==='granted' || (st===null && fix)){
+    try{ await acceptFix(await gpsFix(), fix); return; }
+    catch(e){ geoFail(e); }                  // fall through to the IP fallback
+  }
 
   const ip=await ipLocate();
   const vpn=looksLikeVPN(ip);
@@ -1546,9 +1582,9 @@ async function refresh(force){
 }
 
 // reopened from the background / another tab / bfcache
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refresh(false); });
-addEventListener('pageshow',e=>{ if(e.persisted) refresh(false); });
-addEventListener('focus',()=>refresh(false));
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ refreshLocation(); refresh(false); } });
+addEventListener('pageshow',e=>{ if(e.persisted){ refreshLocation(); refresh(false); } });
+addEventListener('focus',()=>{ refreshLocation(); refresh(false); });
 // and while it sits open
 setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
 
