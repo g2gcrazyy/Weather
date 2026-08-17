@@ -1,6 +1,6 @@
 {
-  "name": "Weather",
-  "short_name": "Weather",
+  "name": "Forecast",
+  "short_name": "Forecast",
   "description": "Weather forecasts in a clean, ad-free layout.",
   "start_url": "./",
   "scope": "./",
