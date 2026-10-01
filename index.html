@@ -808,18 +808,26 @@ function mapAPPLE(d,name){
       time:cw.asOf ? toLocalISO(cw.asOf) : null },
     hourly, daily, periods:[],
     nextHour: d.forecastNextHour || null,
+    // forecastNextHour.summary sometimes reports only "clear" while its own minutes show
+    // precipitation, which leaves the headline saying "Precipitation". The hourly feed
+    // carries the actual type, so use it as a fallback for the wording.
+    precipType: (hrs.find(h=>{
+      const t=new Date(h.forecastStart).getTime();
+      return t>=cutoff && t<=Date.now()+2*60*60*1000
+          && h.precipitationType && h.precipitationType!=='clear';
+    })||{}).precipitationType || null,
     attributionURL: (cw.metadata||{}).attributionURL || 'https://developer.apple.com/weatherkit/data-source-attribution/',
     source: '\uF8FF Weather',
   };
 }
 
 /* ---- Next Hour: Apple's minute-by-minute precipitation ---- */
-function nextHourText(nh){
+function nextHourText(nh,type){
   const mins=nh.minutes||[], S=nh.summary||[];
   const wet=m=>(m.precipitationIntensity>0)||(m.precipitationChance>=0.5);
   const word=c=>({rain:'Rain',snow:'Snow',sleet:'Sleet',hail:'Hail',mixed:'Mixed precipitation'}
                  [String(c||'').toLowerCase()]||'Precipitation');
-  const cond=(S.find(x=>x.condition && x.condition!=='clear')||{}).condition;
+  const cond=(S.find(x=>x.condition && x.condition!=='clear')||{}).condition || type;
   const first=mins.findIndex(wet);
   if(first<0) return 'No precipitation expected in the next hour.';
   if(first===0){
@@ -829,10 +837,10 @@ function nextHourText(nh){
   }
   return `${word(cond)} starting in about ${first} min.`;
 }
-function nextHourCard(nh){
+function nextHourCard(nh,type){
   if(!nh || !Array.isArray(nh.minutes) || nh.minutes.length<2) return '';
   const mins=nh.minutes.slice(0,60), n=mins.length;
-  const text=nextHourText(nh);
+  const text=nextHourText(nh,type);
   const peak=Math.max(...mins.map(m=>+m.precipitationIntensity||0));
   let body;
   if(peak<=0){
@@ -1235,7 +1243,7 @@ function render(f){
         ? `<div class="feels">Feels like ${rnd(c.feelsLike)}&deg;</div>` : ''}
       ${f.normal?`<div style="font-size:13px;color:var(--ink-faint);margin-top:2px">Normal ${rnd(f.normal.lo)}&deg; / ${rnd(f.normal.hi)}&deg;</div>`:''}
     </div>
-    ${nextHourCard(f.nextHour)}
+    ${nextHourCard(f.nextHour,f.precipType)}
     ${f.narrative?`<div class="card"><div class="cap">Forecast</div><div class="narr">${f.narrative}</div></div>`:''}
     ${f.hourly.length?`<div class="card"><div class="cap">Hourly Forecast</div><div class="hourly">${strip}</div></div>`:''}
     ${dailyCard}
