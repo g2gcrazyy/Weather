@@ -822,20 +822,29 @@ function mapAPPLE(d,name){
 }
 
 /* ---- Next Hour: Apple's minute-by-minute precipitation ---- */
+/* Rainfall rate in mm/hr. These are the conventional light/moderate/heavy thresholds, and
+   HEAVY_MM doubles as the chart's ceiling so bar height means an absolute rate — the same
+   shower looks the same every time, and comparable to what Apple's own app draws. */
+const MOD_MM=2.5, HEAVY_MM=7.6;
+const intensityBand = v => v>=HEAVY_MM ? 'Heavy' : v>=MOD_MM ? 'Moderate' : 'Light';
+
 function nextHourText(nh,type){
   const mins=nh.minutes||[], S=nh.summary||[];
   const wet=m=>(m.precipitationIntensity>0)||(m.precipitationChance>=0.5);
-  const word=c=>({rain:'Rain',snow:'Snow',sleet:'Sleet',hail:'Hail',mixed:'Mixed precipitation'}
-                 [String(c||'').toLowerCase()]||'Precipitation');
+  const word=c=>({rain:'rain',snow:'snow',sleet:'sleet',hail:'hail',mixed:'mixed precipitation'}
+                 [String(c||'').toLowerCase()]||'precipitation');
   const cond=(S.find(x=>x.condition && x.condition!=='clear')||{}).condition || type;
   const first=mins.findIndex(wet);
   if(first<0) return 'No precipitation expected in the next hour.';
+  const peak=Math.max(0,...mins.map(m=>+m.precipitationIntensity||0));
+  // "Light rain", not just "Rain" — the rate is most of what you want to know
+  const phrase=(peak>0 ? intensityBand(peak)+' '+word(cond) : word(cond)).replace(/^./,c=>c.toUpperCase());
   if(first===0){
     const stop=mins.findIndex((m,i)=>i>0 && !wet(m));
-    return stop>0 ? `${word(cond)} stopping in about ${stop} min.`
-                  : `${word(cond)} for the next hour.`;
+    return stop>0 ? `${phrase} stopping in about ${stop} min.`
+                  : `${phrase} for the next hour.`;
   }
-  return `${word(cond)} starting in about ${first} min.`;
+  return `${phrase} starting in about ${first} min.`;
 }
 function nextHourCard(nh,type){
   if(!nh || !Array.isArray(nh.minutes) || nh.minutes.length<2) return '';
@@ -847,10 +856,12 @@ function nextHourCard(nh,type){
     body='';                      // nothing to plot; the sentence already says so
   }else{
     const VW=340, H=46, bw=VW/n;
+    // Absolute scale, not normalised to this hour's peak: a drizzle must not be drawn the
+    // same as a downpour. Anything at or above heavy fills the plot.
     const bars=mins.map((m,i)=>{
       const v=+m.precipitationIntensity||0;
       if(v<=0) return '';
-      const h=Math.max(2,(v/peak)*H);
+      const h=Math.max(2,Math.min(1,v/HEAVY_MM)*H);
       return `<rect x="${(i*bw).toFixed(2)}" y="${(H-h).toFixed(2)}" width="${Math.max(1,bw-0.7).toFixed(2)}" height="${h.toFixed(2)}" rx="1.2" fill="url(#nhgrad)"/>`;
     }).join('');
     body=`<svg viewBox="0 0 ${VW} ${H}" preserveAspectRatio="none" aria-hidden="true">
