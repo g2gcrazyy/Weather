@@ -828,19 +828,45 @@ function mapAPPLE(d,name){
 const MOD_MM=2.5, HEAVY_MM=7.6;
 const intensityBand = v => v>=HEAVY_MM ? 'Heavy' : v>=MOD_MM ? 'Moderate' : 'Light';
 
+/* Which minutes actually count as precipitation.
+
+   CRITICAL: precipitationIntensity is CONDITIONAL — the rate it would fall at IF it fell.
+   It routinely reads ~0.3 mm/hr at a 2% chance, which is not rain. Treating nonzero
+   intensity as wet stretched a 3-minute shower into 15 minutes of phantom drizzle and
+   disagreed with Apple's own app. Apple drives its UI from the summary segments, which
+   already apply its probability gating, so prefer those and fall back to the per-minute
+   chance only when no segments are given. */
+const WET_CHANCE=0.2;
+function wetMinutes(nh){
+  const mins=nh.minutes||[];
+  const S=(nh.summary||[]).filter(x=>x.startTime);
+  if(S.length){
+    const seg=S.map(x=>({t:new Date(x.startTime).getTime(), wet:!!x.condition && x.condition!=='clear'}))
+                .sort((a,b)=>a.t-b.t);
+    return mins.map(m=>{
+      const t=new Date(m.startTime).getTime();
+      let cur=seg[0];
+      for(const x of seg){ if(x.t<=t) cur=x; }
+      return cur ? cur.wet : false;
+    });
+  }
+  return mins.map(m=>(+m.precipitationChance||0)>=WET_CHANCE && (+m.precipitationIntensity||0)>0);
+}
+
 function nextHourText(nh,type){
   const mins=nh.minutes||[], S=nh.summary||[];
-  const wet=m=>(m.precipitationIntensity>0)||(m.precipitationChance>=0.5);
   const word=c=>({rain:'rain',snow:'snow',sleet:'sleet',hail:'hail',mixed:'mixed precipitation'}
                  [String(c||'').toLowerCase()]||'precipitation');
   const cond=(S.find(x=>x.condition && x.condition!=='clear')||{}).condition || type;
-  const first=mins.findIndex(wet);
+  const W=wetMinutes(nh);
+  const first=W.indexOf(true);
   if(first<0) return 'No precipitation expected in the next hour.';
-  const peak=Math.max(0,...mins.map(m=>+m.precipitationIntensity||0));
+  // rate taken from the wet stretch only, so a conditional trickle can't set the band
+  const peak=Math.max(0,...mins.filter((m,i)=>W[i]).map(m=>+m.precipitationIntensity||0));
   // "Light rain", not just "Rain" — the rate is most of what you want to know
   const phrase=(peak>0 ? intensityBand(peak)+' '+word(cond) : word(cond)).replace(/^./,c=>c.toUpperCase());
   if(first===0){
-    const stop=mins.findIndex((m,i)=>i>0 && !wet(m));
+    const stop=W.indexOf(false);
     return stop>0 ? `${phrase} stopping in about ${stop} min.`
                   : `${phrase} for the next hour.`;
   }
@@ -850,7 +876,8 @@ function nextHourCard(nh,type){
   if(!nh || !Array.isArray(nh.minutes) || nh.minutes.length<2) return '';
   const mins=nh.minutes.slice(0,60), n=mins.length;
   const text=nextHourText(nh,type);
-  const peak=Math.max(...mins.map(m=>+m.precipitationIntensity||0));
+  const W=wetMinutes(nh);                 // same gating as the sentence, so they agree
+  const peak=Math.max(0,...mins.filter((m,i)=>W[i]).map(m=>+m.precipitationIntensity||0));
   let body;
   if(peak<=0){
     body='';                      // nothing to plot; the sentence already says so
@@ -859,7 +886,7 @@ function nextHourCard(nh,type){
     // Absolute scale, not normalised to this hour's peak: a drizzle must not be drawn the
     // same as a downpour. Anything at or above heavy fills the plot.
     const bars=mins.map((m,i)=>{
-      const v=+m.precipitationIntensity||0;
+      const v=W[i] ? (+m.precipitationIntensity||0) : 0;
       if(v<=0) return '';
       const h=Math.max(2,Math.min(1,v/HEAVY_MM)*H);
       return `<rect x="${(i*bw).toFixed(2)}" y="${(H-h).toFixed(2)}" width="${Math.max(1,bw-0.7).toFixed(2)}" height="${h.toFixed(2)}" rx="1.2" fill="url(#nhgrad)"/>`;
