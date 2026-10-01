@@ -336,14 +336,15 @@ const CONFIG = {
                                                  //   PAGE (its <script ld+json> holds 72x1h). Needs a proxy
                                                  //   (main site isn't wildcard-CORS). Blank -> use 6h shortterm.
   },
-  apple: {                  // Apple WeatherKit. Auth is an ES256 JWT signed by a .p8 key, which
-                            // cannot live in a public page — a minter on the Oracle VM signs
-                            // short-lived tokens. The weather data itself comes browser -> Apple
-                            // directly, since WeatherKit sends Access-Control-Allow-Origin: *.
-    tokenUrl: 'https://goallight.duckdns.org/weatherkit/token',
-    base:     'https://weatherkit.apple.com/api/v1/weather/en',
-    dataSets: 'currentWeather,forecastDaily,forecastHourly,forecastNextHour',
-    country:  'CA',
+  apple: {                  // Apple WeatherKit, via a proxy on the Oracle VM.
+                            // Calling Apple from the page does NOT work: the Authorization
+                            // header forces a CORS preflight, and weatherkit.apple.com answers
+                            // OPTIONS with 401 and no Access-Control-Allow-Headers, so the
+                            // browser blocks the request. (Its ACAO:* on the GET is moot.)
+                            // The proxy also keeps the signing key and token off the device.
+                            // This URL takes a plain GET with no custom headers -> no preflight.
+    proxy:   'https://goallight.duckdns.org/weatherkit/weather',
+    country: 'CA',
   },
 };
 /* =============================================================== */
@@ -743,23 +744,12 @@ function mapGEM(d,name){
 }
 
 /* ===================== Apple WeatherKit =====================
-   The signing key lives on the VM (see CONFIG.apple.tokenUrl); this only fetches the
-   short-lived token it mints, caches it until nearly expired, and then talks to Apple
-   directly. Tokens last an hour, so this is ~1 extra request per hour per device. */
-let _wkTok=null;
-async function appleToken(){
-  const now=Math.floor(Date.now()/1000);
-  if(_wkTok && _wkTok.exp-now>120) return _wkTok.token;
-  const saved=loadPrefs().wkToken;                       // survives a relaunch
-  if(saved && saved.token && saved.exp-now>120){ _wkTok=saved; return saved.token; }
-  const r=await fetch(CONFIG.apple.tokenUrl);
-  if(!r.ok) throw new Error('WeatherKit token '+r.status);
-  const j=await r.json();
-  if(!j.token) throw new Error('WeatherKit token malformed');
-  _wkTok={token:j.token, exp:j.exp};
-  savePrefs({ wkToken:_wkTok });
-  return _wkTok.token;
-}
+   Everything Apple-side happens on the VM (see CONFIG.apple.proxy): it holds the .p8,
+   signs the JWT, calls Apple and briefly caches the result. From here it is an ordinary
+   GET with no custom headers, which is the whole point -- see the note on CONFIG.apple. */
+const appleURL = (lat,lon) =>
+  `${CONFIG.apple.proxy}?lat=${lat}&lon=${lon}`
+  + `&tz=${encodeURIComponent(tzName())}&country=${CONFIG.apple.country}`;
 const tzName = () => { try{ return Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'; }catch(e){ return 'UTC'; } };
 /* WeatherKit condition codes are CamelCase enums ("PartlyCloudy"). Order matters:
    "MostlyCloudy" must hit the cloud rule, not the clear one. */
@@ -785,12 +775,8 @@ function toLocalISO(iso){
 const pct = v => v==null?null:Math.round(v*100);
 
 async function fetchAPPLE(lat,lon,name){
-  const a=CONFIG.apple, tok=await appleToken();
-  const u=`${a.base}/${lat}/${lon}?dataSets=${a.dataSets}`
-        + `&timezone=${encodeURIComponent(tzName())}&countryCode=${a.country}`;
-  const r=await fetch(u,{headers:{Authorization:'Bearer '+tok}});
-  if(r.status===401){ _wkTok=null; savePrefs({wkToken:null}); throw new Error('Apple 401 (token rejected)'); }
-  if(!r.ok) throw new Error('Apple '+r.status);
+  const r=await fetch(appleURL(lat,lon));
+  if(!r.ok) throw new Error('Apple Weather unavailable ('+r.status+')');
   return mapAPPLE(await r.json(), name);
 }
 function mapAPPLE(d,name){
@@ -1627,10 +1613,8 @@ function removePlace(i){ const l=getPlaces(); l.splice(i,1); savePlaces(l); rend
 async function quickLook(pl){
   if(CONFIG.source==='apple'){
     try{
-      const a=CONFIG.apple, tok=await appleToken();
-      const r=await fetch(`${a.base}/${pl.lat}/${pl.lon}?dataSets=currentWeather,forecastDaily`
-            + `&timezone=${encodeURIComponent(tzName())}&countryCode=${a.country}`,
-            {headers:{Authorization:'Bearer '+tok}});
+      // same URL as the main fetch, so it is served from the proxy's short cache
+      const r=await fetch(appleURL(pl.lat,pl.lon));
       if(!r.ok) return null;
       const j=await r.json(), cw=j.currentWeather||{}, d0=((j.forecastDaily||{}).days||[])[0]||{};
       return { temp:cw.temperature, label:appleLabel(cw.conditionCode), sky:appleSky(cw.conditionCode),
@@ -1803,6 +1787,7 @@ setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
   // One-time cleanup: earlier builds saved IP guesses as if they were your location, so a
   // reading taken behind a VPN (or a mislocated ISP gateway) could stick. Drop those; a city
   // you picked yourself is kept.
+  if(loadPrefs().wkToken) savePrefs({ wkToken:null });   // tokens no longer touch the device
   if(loadPrefs().prefsVersion!==2){
     if(loadPrefs().manual!==true) savePrefs({ lat:null, lon:null, name:null });
     savePrefs({ prefsVersion:2 });
