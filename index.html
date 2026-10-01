@@ -836,9 +836,20 @@ const intensityBand = v => v>=HEAVY_MM ? 'Heavy' : v>=MOD_MM ? 'Moderate' : 'Lig
    disagreed with Apple's own app. Apple drives its UI from the summary segments, which
    already apply its probability gating, so prefer those and fall back to the per-minute
    chance only when no segments are given. */
-// Apple treats a 23% chance as "clear" (observed in Toronto, 2026-10-01), so the fallback
-// threshold sits above that. Only used when Apple supplies no summary segments.
-const WET_CHANCE=0.3;
+/* Apple's own cutoff, measured against its summary segments across 25 locations
+   (2026-10-01). In Glasgow, where one hour held both a clear and a rain segment, the
+   boundary was exact: every minute Apple called clear was <= 0.30 chance, every minute it
+   called rain was >= 0.31. Across whole hours the gap is wide — the strongest minute in any
+   all-clear hour was 0.26, the weakest in any rain hour was 0.77.
+
+   Intensity is NOT the gate and must never be used as one: Toronto showed 0.81 mm/hr at an
+   18% chance and Apple called it clear, while Glasgow showed only 0.20 mm/hr at a 93% chance
+   and Apple called it rain. Chance decides; intensity only says how hard.
+
+   Apple also segments by episode rather than per minute — a rain segment in Cork contained a
+   4%-chance minute in the middle of a shower — which is why the summary is preferred over
+   this threshold whenever Apple provides it. */
+const WET_CHANCE=0.305;
 function wetMinutes(nh){
   const mins=nh.minutes||[];
   const S=(nh.summary||[]).filter(x=>x.startTime);
@@ -852,7 +863,7 @@ function wetMinutes(nh){
       return cur ? cur.wet : false;
     });
   }
-  return mins.map(m=>(+m.precipitationChance||0)>=WET_CHANCE && (+m.precipitationIntensity||0)>0);
+  return mins.map(m=>(+m.precipitationChance||0)>=WET_CHANCE);
 }
 
 function nextHourText(nh,type){
