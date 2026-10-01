@@ -836,7 +836,9 @@ const intensityBand = v => v>=HEAVY_MM ? 'Heavy' : v>=MOD_MM ? 'Moderate' : 'Lig
    disagreed with Apple's own app. Apple drives its UI from the summary segments, which
    already apply its probability gating, so prefer those and fall back to the per-minute
    chance only when no segments are given. */
-const WET_CHANCE=0.2;
+// Apple treats a 23% chance as "clear" (observed in Toronto, 2026-10-01), so the fallback
+// threshold sits above that. Only used when Apple supplies no summary segments.
+const WET_CHANCE=0.3;
 function wetMinutes(nh){
   const mins=nh.minutes||[];
   const S=(nh.summary||[]).filter(x=>x.startTime);
@@ -875,12 +877,15 @@ function nextHourText(nh,type){
 function nextHourCard(nh,type){
   if(!nh || !Array.isArray(nh.minutes) || nh.minutes.length<2) return '';
   const mins=nh.minutes.slice(0,60), n=mins.length;
-  const text=nextHourText(nh,type);
   const W=wetMinutes(nh);                 // same gating as the sentence, so they agree
+  // Apple shows this box only when precipitation is actually expected — on a dry hour its
+  // app drops straight from the hero to Conditions rather than saying "none expected".
+  if(!W.some(Boolean)) return '';
+  const text=nextHourText(nh,type);
   const peak=Math.max(0,...mins.filter((m,i)=>W[i]).map(m=>+m.precipitationIntensity||0));
   let body;
   if(peak<=0){
-    body='';                      // nothing to plot; the sentence already says so
+    body='';                      // wet but no rate to plot; the sentence carries it
   }else{
     const VW=340, H=46, bw=VW/n;
     // Absolute scale, not normalised to this hour's peak: a drizzle must not be drawn the
