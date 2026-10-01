@@ -74,9 +74,11 @@
 
   .wrap { max-width:480px; margin:0 auto; padding:14px 16px 40px; position:relative; z-index:1; }
 
-  .srcbar { display:flex; gap:6px; margin:22px 0 0; }
-  .srcbar button { flex:1; background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
-    border:1px solid var(--card-line); color:var(--ink-dim); font-size:12px; font-weight:600; padding:8px 4px; border-radius:10px; cursor:pointer; white-space:nowrap; }
+  .srcbar { display:flex; flex-wrap:wrap; gap:6px; margin:22px 0 0; }
+  /* four sources: let labels wrap to two lines instead of being squashed or clipped.
+     align-items defaults to stretch, so wrapped buttons stay the same height. */
+  .srcbar button { flex:1 1 0; min-width:0; background:var(--card); backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+    border:1px solid var(--card-line); color:var(--ink-dim); font-size:11.5px; font-weight:600; line-height:1.2; padding:7px 4px; border-radius:10px; cursor:pointer; }
   .srcbar button.on { color:var(--ink); background:rgba(255,255,255,.24); }
 
   .topbar { position:relative; margin-bottom:10px; min-height:38px; }
@@ -227,6 +229,15 @@
   .spinner { width:26px; height:26px; border:3px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; margin:0 auto 14px; animation:spin .8s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
   @media (prefers-reduced-motion:reduce){ .spinner{ animation:none; } body{ transition:none; } }
+  /* Next Hour precipitation (Apple only) — minute-by-minute, chart has no axis
+     numbers by design: it shows shape and timing, the sentence carries the meaning. */
+  .nh { padding:10px 14px 14px; }
+  .nh .nhtext { font-size:15px; line-height:1.4; color:var(--ink); margin-bottom:10px; }
+  .nh svg { display:block; width:100%; height:auto; }
+  .nh .nhaxis { display:flex; justify-content:space-between; margin-top:5px;
+    font-size:11.5px; color:var(--ink-faint); }
+  .nh .nhflat { font-size:13px; color:var(--ink-faint); padding-top:2px; }
+
   /* location banner — shown only when the position on screen might be wrong */
   .locbar { display:flex; align-items:center; gap:10px; margin:0 0 12px; padding:9px 12px;
     border-radius:14px; background:var(--card); border:1px solid var(--card-line);
@@ -284,6 +295,7 @@
     <button id="src-gem">Env. Canada</button>
     <button id="src-twn" class="on">Weather Network</button>
     <button id="src-comb">Combined</button>
+    <button id="src-apple">Apple</button>
   </div>
   <div class="unitbar">
     <button id="u-c" class="on">&deg;C</button><button id="u-f">&deg;F</button>
@@ -323,6 +335,15 @@ const CONFIG = {
     hourlyPage: '',                              // OPTIONAL true-hourly: URL that returns the TWN hourly
                                                  //   PAGE (its <script ld+json> holds 72x1h). Needs a proxy
                                                  //   (main site isn't wildcard-CORS). Blank -> use 6h shortterm.
+  },
+  apple: {                  // Apple WeatherKit. Auth is an ES256 JWT signed by a .p8 key, which
+                            // cannot live in a public page — a minter on the Oracle VM signs
+                            // short-lived tokens. The weather data itself comes browser -> Apple
+                            // directly, since WeatherKit sends Access-Control-Allow-Origin: *.
+    tokenUrl: 'https://goallight.duckdns.org/weatherkit/token',
+    base:     'https://weatherkit.apple.com/api/v1/weather/en',
+    dataSets: 'currentWeather,forecastDaily,forecastHourly,forecastNextHour',
+    country:  'CA',
   },
 };
 /* =============================================================== */
@@ -721,6 +742,136 @@ function mapGEM(d,name){
   };
 }
 
+/* ===================== Apple WeatherKit =====================
+   The signing key lives on the VM (see CONFIG.apple.tokenUrl); this only fetches the
+   short-lived token it mints, caches it until nearly expired, and then talks to Apple
+   directly. Tokens last an hour, so this is ~1 extra request per hour per device. */
+let _wkTok=null;
+async function appleToken(){
+  const now=Math.floor(Date.now()/1000);
+  if(_wkTok && _wkTok.exp-now>120) return _wkTok.token;
+  const saved=loadPrefs().wkToken;                       // survives a relaunch
+  if(saved && saved.token && saved.exp-now>120){ _wkTok=saved; return saved.token; }
+  const r=await fetch(CONFIG.apple.tokenUrl);
+  if(!r.ok) throw new Error('WeatherKit token '+r.status);
+  const j=await r.json();
+  if(!j.token) throw new Error('WeatherKit token malformed');
+  _wkTok={token:j.token, exp:j.exp};
+  savePrefs({ wkToken:_wkTok });
+  return _wkTok.token;
+}
+const tzName = () => { try{ return Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'; }catch(e){ return 'UTC'; } };
+/* WeatherKit condition codes are CamelCase enums ("PartlyCloudy"). Order matters:
+   "MostlyCloudy" must hit the cloud rule, not the clear one. */
+function appleSky(code){
+  const s=String(code||'');
+  if(/Thunder|Hurricane|TropicalStorm|Tornado/i.test(s)) return 'storm';
+  if(/Snow|Flurries|Sleet|Blizzard|Freezing|Hail|Wintry|Ice/i.test(s)) return 'snow';
+  if(/Rain|Drizzle|Showers/i.test(s)) return 'rain';
+  if(/Fog|Haze|Smok|Dust|Ash/i.test(s)) return 'fog';
+  if(/Cloudy|Overcast/i.test(s)) return 'cloud';
+  if(/Clear|Sunny|Fair/i.test(s)) return 'clear';
+  return 'cloud';
+}
+const appleLabel = c => String(c||'').replace(/([a-z])([A-Z])/g,'$1 $2');
+/* Apple returns UTC instants; every other source in this app returns naive LOCAL time
+   strings, and the day-grouping code slices the first 10 chars as a local date. Convert
+   so Apple data groups into the right days instead of drifting by the UTC offset. */
+function toLocalISO(iso){
+  const d=new Date(iso); if(isNaN(d)) return iso;
+  const p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+const pct = v => v==null?null:Math.round(v*100);
+
+async function fetchAPPLE(lat,lon,name){
+  const a=CONFIG.apple, tok=await appleToken();
+  const u=`${a.base}/${lat}/${lon}?dataSets=${a.dataSets}`
+        + `&timezone=${encodeURIComponent(tzName())}&countryCode=${a.country}`;
+  const r=await fetch(u,{headers:{Authorization:'Bearer '+tok}});
+  if(r.status===401){ _wkTok=null; savePrefs({wkToken:null}); throw new Error('Apple 401 (token rejected)'); }
+  if(!r.ok) throw new Error('Apple '+r.status);
+  return mapAPPLE(await r.json(), name);
+}
+function mapAPPLE(d,name){
+  const cw=d.currentWeather||{};
+  const hrs=(d.forecastHourly||{}).hours||[];
+  const dys=(d.forecastDaily||{}).days||[];
+  const cutoff=Date.now()-60*60*1000;                    // keep the hour we're inside
+  const hourly=hrs.filter(h=>new Date(h.forecastStart).getTime()>=cutoff).map(h=>({
+    time:toLocalISO(h.forecastStart), temp:h.temperature, feelsLike:h.temperatureApparent,
+    label:appleLabel(h.conditionCode), sky:appleSky(h.conditionCode), isDay:h.daylight!==false,
+    pop:pct(h.precipitationChance), humidity:pct(h.humidity),
+    windSpeed:h.windSpeed, windDir:h.windDirection, gust:h.windGust,
+    pressure:h.pressure, cloud:pct(h.cloudCover), dewPoint:h.temperatureDewPoint,
+  }));
+  const daily=dys.map(x=>({
+    date:toLocalISO(x.forecastStart).slice(0,10),
+    label:appleLabel(x.conditionCode), sky:appleSky(x.conditionCode), isDay:true,
+    hi:x.temperatureMax, lo:x.temperatureMin,
+    sunrise:x.sunrise, sunset:x.sunset, uv:x.maxUvIndex,
+    precip:x.precipitationAmount, pop:pct(x.precipitationChance),
+    windMax:x.windSpeedMax,
+  }));
+  return {
+    place:name||'Current Location', narrative:'', normal:null, dailyLabel:'10-Day Forecast',
+    current:{ temp:cw.temperature, feelsLike:cw.temperatureApparent, humidity:pct(cw.humidity),
+      label:appleLabel(cw.conditionCode), sky:appleSky(cw.conditionCode), isDay:cw.daylight!==false,
+      windSpeed:cw.windSpeed, windDir:cw.windDirection, gust:cw.windGust,
+      pressure:cw.pressure, visibility:(cw.visibility!=null?cw.visibility/1000:null),
+      cloud:pct(cw.cloudCover), uv:cw.uvIndex, dewPoint:cw.temperatureDewPoint,
+      time:cw.asOf ? toLocalISO(cw.asOf) : null },
+    hourly, daily, periods:[],
+    nextHour: d.forecastNextHour || null,
+    attributionURL: (cw.metadata||{}).attributionURL || 'https://developer.apple.com/weatherkit/data-source-attribution/',
+    source: '\uF8FF Weather',
+  };
+}
+
+/* ---- Next Hour: Apple's minute-by-minute precipitation ---- */
+function nextHourText(nh){
+  const mins=nh.minutes||[], S=nh.summary||[];
+  const wet=m=>(m.precipitationIntensity>0)||(m.precipitationChance>=0.5);
+  const word=c=>({rain:'Rain',snow:'Snow',sleet:'Sleet',hail:'Hail',mixed:'Mixed precipitation'}
+                 [String(c||'').toLowerCase()]||'Precipitation');
+  const cond=(S.find(x=>x.condition && x.condition!=='clear')||{}).condition;
+  const first=mins.findIndex(wet);
+  if(first<0) return 'No precipitation expected in the next hour.';
+  if(first===0){
+    const stop=mins.findIndex((m,i)=>i>0 && !wet(m));
+    return stop>0 ? `${word(cond)} stopping in about ${stop} min.`
+                  : `${word(cond)} for the next hour.`;
+  }
+  return `${word(cond)} starting in about ${first} min.`;
+}
+function nextHourCard(nh){
+  if(!nh || !Array.isArray(nh.minutes) || nh.minutes.length<2) return '';
+  const mins=nh.minutes.slice(0,60), n=mins.length;
+  const text=nextHourText(nh);
+  const peak=Math.max(...mins.map(m=>+m.precipitationIntensity||0));
+  let body;
+  if(peak<=0){
+    body='';                      // nothing to plot; the sentence already says so
+  }else{
+    const VW=340, H=46, bw=VW/n;
+    const bars=mins.map((m,i)=>{
+      const v=+m.precipitationIntensity||0;
+      if(v<=0) return '';
+      const h=Math.max(2,(v/peak)*H);
+      return `<rect x="${(i*bw).toFixed(2)}" y="${(H-h).toFixed(2)}" width="${Math.max(1,bw-0.7).toFixed(2)}" height="${h.toFixed(2)}" rx="1.2" fill="url(#nhgrad)"/>`;
+    }).join('');
+    body=`<svg viewBox="0 0 ${VW} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="nhgrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#8fd3ff"/><stop offset="100%" stop-color="#8fd3ff" stop-opacity=".45"/>
+        </linearGradient></defs>
+        <line x1="0" y1="${H-0.5}" x2="${VW}" y2="${H-0.5}" stroke="rgba(255,255,255,.22)" stroke-width="1"/>
+        ${bars}</svg>
+      <div class="nhaxis"><span>Now</span><span>15m</span><span>30m</span><span>45m</span><span>60m</span></div>`;
+  }
+  return `<div class="card"><div class="cap">Next Hour</div>
+    <div class="nh"><div class="nhtext">${text}</div>${body}</div></div>`;
+}
+
 function twnSky(bg,text){
   const s=((bg||'')+' '+(text||'')).toLowerCase();
   if(/thunder|tstorm/.test(s)) return 'storm';
@@ -1097,6 +1248,7 @@ function render(f){
         ? `<div class="feels">Feels like ${rnd(c.feelsLike)}&deg;</div>` : ''}
       ${f.normal?`<div style="font-size:13px;color:var(--ink-faint);margin-top:2px">Normal ${rnd(f.normal.lo)}&deg; / ${rnd(f.normal.hi)}&deg;</div>`:''}
     </div>
+    ${nextHourCard(f.nextHour)}
     ${f.narrative?`<div class="card"><div class="cap">Forecast</div><div class="narr">${f.narrative}</div></div>`:''}
     ${f.hourly.length?`<div class="card"><div class="cap">Hourly Forecast</div><div class="hourly">${strip}</div></div>`:''}
     ${dailyCard}
@@ -1112,7 +1264,8 @@ function render(f){
       <div class="tile"><div class="cap">Sunrise</div><div class="big">${SR.rise?timeHM(SR.rise):'&#8212;'}</div><div class="note">${SR.set?'Sunset '+timeHM(SR.set):''}</div></div>
       <div class="tile"><div class="cap">Pressure</div><div class="big">${c.pressure==null?'&#8212;':(+c.pressure).toFixed(U().pressDp)}</div><div class="note">${U().press}</div></div>
     </div>`;
-  $('#foot').innerHTML='Source: '+f.source+(c.time?' &middot; Observed '+timeHM(c.time):'');
+  $('#foot').innerHTML='Source: '+f.source+(c.time?' &middot; Observed '+timeHM(c.time):'')
+    + (f.attributionURL ? ` &middot; <a href="${f.attributionURL}" target="_blank" rel="noopener" style="color:inherit">Data Sources</a>` : '');
   CURRENT_F=f;
   enhanceScroll();
   wireDays();
@@ -1149,6 +1302,7 @@ async function load(lat,lon,name,remember,approx){
     let f;
     if(CONFIG.source==='twn'){ f=await fetchTWN(lat,lon,name); if(!f){ setupCard(); return; } }
     else if(CONFIG.source==='comb'){ f=await fetchCombined(lat,lon,name); if(!f){ setupCard(); return; } }
+    else if(CONFIG.source==='apple'){ f=await fetchAPPLE(lat,lon,name); }
     else { f=await fetchGEM(lat,lon,name); }
     if(seq!==loadSeq) return;                // a newer load already won; don't paint over it
     CURRENT_RAW=f;
@@ -1163,6 +1317,7 @@ function markSource(src){
   $('#src-twn').classList.toggle('on',src==='twn');
   $('#src-gem').classList.toggle('on',src==='gem');
   $('#src-comb').classList.toggle('on',src==='comb');
+  $('#src-apple').classList.toggle('on',src==='apple');
 }
 function setSource(src){
   CONFIG.source=src; savePrefs({ source:src }); markSource(src);
@@ -1171,6 +1326,7 @@ function setSource(src){
 $('#src-gem').addEventListener('click',()=>setSource('gem'));
 $('#src-twn').addEventListener('click',()=>setSource('twn'));
 $('#src-comb').addEventListener('click',()=>setSource('comb'));
+$('#src-apple').addEventListener('click',()=>setSource('apple'));
 
 function markUnit(u){
   $('#u-c').classList.toggle('on',u==='C');
@@ -1469,6 +1625,19 @@ function removePlace(i){ const l=getPlaces(); l.splice(i,1); savePlaces(l); rend
 
 /* Lightweight current-conditions lookup for a card (one or two small calls). */
 async function quickLook(pl){
+  if(CONFIG.source==='apple'){
+    try{
+      const a=CONFIG.apple, tok=await appleToken();
+      const r=await fetch(`${a.base}/${pl.lat}/${pl.lon}?dataSets=currentWeather,forecastDaily`
+            + `&timezone=${encodeURIComponent(tzName())}&countryCode=${a.country}`,
+            {headers:{Authorization:'Bearer '+tok}});
+      if(!r.ok) return null;
+      const j=await r.json(), cw=j.currentWeather||{}, d0=((j.forecastDaily||{}).days||[])[0]||{};
+      return { temp:cw.temperature, label:appleLabel(cw.conditionCode), sky:appleSky(cw.conditionCode),
+               isDay:cw.daylight!==false, hi:d0.temperatureMax, lo:d0.temperatureMin,
+               time:cw.asOf?toLocalISO(cw.asOf):null };
+    }catch(e){ return null; }
+  }
   const P=`locale=en-CA&lat=${pl.lat}&long=${pl.lon}&unit=metric`, b=CONFIG.twn.base;
   if(CONFIG.source==='twn' || CONFIG.source==='comb'){
     const [ob,lt]=await Promise.all([
@@ -1639,7 +1808,7 @@ setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
     savePrefs({ prefsVersion:2 });
   }
   const pr=loadPrefs();
-  if(pr.source==='gem'||pr.source==='twn'||pr.source==='comb'){
+  if(pr.source==='gem'||pr.source==='twn'||pr.source==='comb'||pr.source==='apple'){
     CONFIG.source=pr.source; markSource(pr.source);
   }
   if(pr.unit==='C'||pr.unit==='F'){ UNIT=pr.unit; }
