@@ -292,10 +292,9 @@
   </div>
   <div id="app"><div class="msg"><div class="spinner"></div>Getting your weather&#8230;</div></div>
   <div class="srcbar">
-    <button id="src-gem">Env. Canada</button>
     <button id="src-twn" class="on">Weather Network</button>
-    <button id="src-comb">Combined</button>
     <button id="src-apple">Apple</button>
+    <button id="src-gem">Env. Canada</button>
   </div>
   <div class="unitbar">
     <button id="u-c" class="on">&deg;C</button><button id="u-f">&deg;F</button>
@@ -977,6 +976,8 @@ function mapTWN({ st, hr, ob, lt, av, hp }, name){
 
 /* COMBINED: The Weather Network for conditions/temps, Environment Canada (GEM) for all
    precipitation data — chance of precipitation and precipitation amounts. */
+/* Combined (TWN conditions + GEM precipitation). Its button is currently removed from the
+   source bar; the code stays so it can be restored by re-adding the button and the listener. */
 async function fetchCombined(lat,lon,name){
   const [twn,gem] = await Promise.all([
     fetchTWN(lat,lon,name),
@@ -1302,7 +1303,6 @@ async function load(lat,lon,name,remember,approx){
 function markSource(src){
   $('#src-twn').classList.toggle('on',src==='twn');
   $('#src-gem').classList.toggle('on',src==='gem');
-  $('#src-comb').classList.toggle('on',src==='comb');
   $('#src-apple').classList.toggle('on',src==='apple');
 }
 function setSource(src){
@@ -1311,7 +1311,6 @@ function setSource(src){
 }
 $('#src-gem').addEventListener('click',()=>setSource('gem'));
 $('#src-twn').addEventListener('click',()=>setSource('twn'));
-$('#src-comb').addEventListener('click',()=>setSource('comb'));
 $('#src-apple').addEventListener('click',()=>setSource('apple'));
 
 function markUnit(u){
@@ -1793,8 +1792,10 @@ setInterval(()=>{ if(!document.hidden) refresh(false); }, 5*60*1000);
     savePrefs({ prefsVersion:2 });
   }
   const pr=loadPrefs();
-  if(pr.source==='gem'||pr.source==='twn'||pr.source==='comb'||pr.source==='apple'){
-    CONFIG.source=pr.source; markSource(pr.source);
+  if(pr.source==='comb') savePrefs({ source:'twn' });   // Combined's button is gone; don't strand anyone on it
+  const src=loadPrefs().source;
+  if(src==='gem'||src==='twn'||src==='apple'){
+    CONFIG.source=src; markSource(src);
   }
   if(pr.unit==='C'||pr.unit==='F'){ UNIT=pr.unit; }
   markUnit(UNIT);
