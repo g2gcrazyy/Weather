@@ -652,7 +652,12 @@ const rnd = v => (v==null||isNaN(v))?'&#8212;':Math.round(v);
 let LOCTZ = { tz:null };
 function offsetFor(tz, when){
   try{
-    const d = when ? new Date(when) : new Date();
+    // Truncate to a whole second first: formatToParts has no millisecond field, so comparing
+    // it against a getTime() that carries milliseconds returns an offset one second short
+    // whenever ms >= 500. One second is enough to roll a time that sits exactly on local
+    // midnight back into the previous day.
+    const raw = when ? new Date(when) : new Date();
+    const d = new Date(Math.floor(raw.getTime()/1000)*1000);
     const f = new Intl.DateTimeFormat('en-US',{ timeZone:tz, hour12:false, year:'numeric',
                 month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
     const p = Object.fromEntries(f.formatToParts(d).map(x=>[x.type,x.value]));
