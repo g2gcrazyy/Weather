@@ -666,6 +666,9 @@ const offSec = when => {
 const isNaiveStr = v => typeof v==='string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(v);
 /* instant -> the location's wall clock, as a naive string */
 function naive(inst){
+  // new Date(null) is epoch zero, not an invalid date, so a null would otherwise render as
+  // a real-looking "7:00PM" (1969 in some zone). Reject empties before they become times.
+  if(inst==null || inst==='') return '';
   const d = new Date(inst); if(isNaN(d)) return '';
   const t = new Date(d.getTime() + offSec(d)*1000), p = n=>String(n).padStart(2,'0');
   return `${t.getUTCFullYear()}-${p(t.getUTCMonth()+1)}-${p(t.getUTCDate())}T${p(t.getUTCHours())}:${p(t.getUTCMinutes())}`;
